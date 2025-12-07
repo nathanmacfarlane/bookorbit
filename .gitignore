@@ -1,0 +1,29 @@
+node_modules/
+dist/
+.env
+.env.local
+client/.env
+server/.env
+*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Docker
+docker/postgres/data/
+
+# Local-only
+local/
+
+# Build artifacts
+coverage/
+*.tsbuildinfo
+
+# IDE
+.idea/
