@@ -11,6 +11,7 @@ import { usePermissions } from '@/features/auth/composables/usePermissions'
 import { MAX_PROFILE_AVATAR_BYTES, useProfileAvatar } from '@/features/auth/composables/useProfileAvatar'
 import { useChangePasswordDialog } from '@/composables/useChangePasswordDialog'
 import SettingsPageHeader from './SettingsPageHeader.vue'
+import ZlibConnectCard from '@/features/zlib/components/ZlibConnectCard.vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useOnboardingTour } from '@/features/onboarding/composables/useOnboardingTour'
 
@@ -485,6 +486,11 @@ function closeUnlinkDialog() {
         {{ saveFeedback }}
       </p>
     </div>
+  </div>
+
+  <!-- Integrations section -->
+  <div class="mt-4">
+    <ZlibConnectCard />
   </div>
 
   <!-- OIDC Identity section -->

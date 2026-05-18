@@ -5,7 +5,17 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 
-import { appConfig, authConfig, dbConfig, emailConfig, fileWriteConfig, migrationConfig, oidcRuntimeConfig, storageConfig } from './config/config';
+import {
+  appConfig,
+  authConfig,
+  dbConfig,
+  emailConfig,
+  fileWriteConfig,
+  migrationConfig,
+  oidcRuntimeConfig,
+  storageConfig,
+  zlibConfig,
+} from './config/config';
 import { validateEnv } from './config/env.validation';
 import { loggerConfig } from './common/logger.config';
 import { CommonModule } from './common/common.module';
@@ -60,6 +70,7 @@ import { KoreaderModule } from './modules/koreader/koreader.module';
 import { AppInfoModule } from './modules/app-info/app-info.module';
 import { AchievementModule } from './modules/achievement/achievement.module';
 import { HardcoverModule } from './modules/hardcover/hardcover.module';
+import { ZlibModule } from './modules/zlib/zlib.module';
 
 @Module({
   imports: [
@@ -67,7 +78,7 @@ import { HardcoverModule } from './modules/hardcover/hardcover.module';
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnv,
-      load: [appConfig, dbConfig, authConfig, storageConfig, fileWriteConfig, emailConfig, migrationConfig, oidcRuntimeConfig],
+      load: [appConfig, dbConfig, authConfig, storageConfig, fileWriteConfig, emailConfig, migrationConfig, oidcRuntimeConfig, zlibConfig],
     }),
     ScheduleModule.forRoot(),
     ThrottlerModule.forRoot({
@@ -128,6 +139,7 @@ import { HardcoverModule } from './modules/hardcover/hardcover.module';
     AppInfoModule,
     AchievementModule,
     HardcoverModule,
+    ZlibModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

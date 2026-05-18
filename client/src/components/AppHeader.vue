@@ -46,6 +46,7 @@ import { useAuth } from '@/features/auth/composables/useAuth'
 import { useChangePasswordDialog } from '@/composables/useChangePasswordDialog'
 import { usePermissions } from '@/features/auth/composables/usePermissions'
 import BookUploadModal from '@/features/library/components/BookUploadModal.vue'
+import ZlibSearchModal from '@/features/zlib/components/ZlibSearchModal.vue'
 import { useLibraryUploadEvents } from '@/features/library/composables/useLibraryUploadEvents'
 import { useBookDockSummary } from '@/features/book-dock/composables/useBookDockSummary'
 import NotificationSheet from '@/features/notifications/components/NotificationSheet.vue'
@@ -98,6 +99,7 @@ function navigateToSettings() {
 }
 
 const uploadOpen = ref(false)
+const zlibOpen = ref(false)
 
 const searchFocused = ref(false)
 const mobileSearchOpen = ref(false)
@@ -631,6 +633,24 @@ function formatBadgeClass(fmt: string): string {
             <TooltipContent>Achievements</TooltipContent>
           </Tooltip>
 
+          <!-- Z-Library search button -->
+          <Tooltip v-if="hasPermission('library_upload')">
+            <TooltipTrigger as-child>
+              <Button
+                variant="ghost"
+                size="icon"
+                :class="[
+                  'h-8 w-8 border border-primary/35 text-foreground/70 hover:border-primary/70 hover:text-foreground transition-colors',
+                  iconRadiusClass,
+                ]"
+                @click="zlibOpen = true"
+              >
+                <Search :size="15" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Search Z-Library</TooltipContent>
+          </Tooltip>
+
           <!-- Upload button -->
           <Tooltip v-if="hasPermission('library_upload')">
             <TooltipTrigger as-child>
@@ -819,4 +839,5 @@ function formatBadgeClass(fmt: string): string {
   </header>
 
   <BookUploadModal v-if="uploadOpen" @close="uploadOpen = false" @uploaded="uploadOpen = false" />
+  <ZlibSearchModal v-if="zlibOpen" @close="zlibOpen = false" />
 </template>
