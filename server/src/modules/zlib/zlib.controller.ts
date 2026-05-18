@@ -35,8 +35,7 @@ export class ZlibController {
         current_database() as db,
         EXISTS (
           SELECT FROM information_schema.tables WHERE table_name = 'zlib_credentials'
-        ) as table_exists,
-        (SELECT COUNT(*) FROM __drizzle_migrations WHERE tag LIKE '%zlib%') as zlib_migrations
+        ) as table_exists
     `);
     return result.rows[0];
   }
