@@ -53,7 +53,7 @@ COPY --from=client-builder --chown=node:node /app/client/dist ./public
 COPY --from=server-builder --chown=node:node /app/server/entrypoint.sh ./entrypoint.sh
 COPY --chown=node:node server/bin/kepubify/ ./bin/kepubify/
 
-RUN chmod +x /app/entrypoint.sh /app/bin/kepubify/* && mkdir -p /books /data/covers /data/book-bucket /tmp && chown -R node:node /data /tmp
+RUN chmod +x /app/entrypoint.sh /app/bin/kepubify/* && mkdir -p /books /data/covers /data/book-bucket /tmp && chown -R node:node /books /data /tmp
 
 EXPOSE 3000
 
