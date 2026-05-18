@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Inject, Post, Query, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Inject, Post, Query, Res, UnauthorizedException } from '@nestjs/common';
+import type { FastifyReply } from 'fastify';
 import { Permission } from '@bookorbit/types';
 import { sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
@@ -52,6 +53,23 @@ export class ZlibController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async disconnect(@CurrentUser() user: RequestUser) {
     await this.credentials.deleteByUserId(user.id);
+  }
+
+  @Get('cover')
+  @Public()
+  async cover(@Query('url') url: string, @Res() res: FastifyReply) {
+    if (!url || !/^https?:\/\//i.test(url)) {
+      res.status(400).send('Invalid URL');
+      return;
+    }
+    const upstream = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!upstream.ok || !upstream.body) {
+      res.status(404).send('Not found');
+      return;
+    }
+    const ct = upstream.headers.get('content-type') ?? 'image/jpeg';
+    res.header('Content-Type', ct).header('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(await upstream.arrayBuffer()));
   }
 
   @Get('status')

@@ -105,7 +105,7 @@ async function addToLibrary(book: ZlibBook) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        bookId: book.id,
+        bookId: String(book.id),
         hash: book.hash,
         filename,
         format: book.extension || 'epub',
@@ -232,7 +232,12 @@ function handleKeydown(e: KeyboardEvent) {
               class="flex items-start gap-3 rounded-md border border-border bg-muted/20 px-3 py-3 hover:bg-muted/40 transition-colors"
             >
               <!-- Cover -->
-              <img v-if="book.cover" :src="book.cover" :alt="book.title" class="w-10 h-14 object-cover rounded shrink-0 bg-muted" />
+              <img
+                v-if="book.cover"
+                :src="`/api/v1/zlib/cover?url=${encodeURIComponent(book.cover)}`"
+                :alt="book.title"
+                class="w-10 h-14 object-cover rounded shrink-0 bg-muted"
+              />
               <div v-else class="w-10 h-14 rounded bg-muted/50 shrink-0 flex items-center justify-center">
                 <BookOpen :size="14" class="text-muted-foreground/50" />
               </div>
