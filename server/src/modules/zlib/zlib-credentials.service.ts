@@ -36,13 +36,16 @@ export class ZlibCredentialsService {
 
   async upsert(userId: number, email: string, remixUserId: string, remixUserKey: string): Promise<void> {
     const encryptedKey = this.encrypt(remixUserKey);
-    await this.db
-      .insert(zlibCredentials)
-      .values({ userId, email, remixUserId, remixUserKey: encryptedKey })
-      .onConflictDoUpdate({
-        target: zlibCredentials.userId,
-        set: { email, remixUserId, remixUserKey: encryptedKey, updatedAt: new Date() },
-      });
+    const existing = await this.db.select({ id: zlibCredentials.id }).from(zlibCredentials).where(eq(zlibCredentials.userId, userId)).limit(1);
+
+    if (existing.length > 0) {
+      await this.db
+        .update(zlibCredentials)
+        .set({ email, remixUserId, remixUserKey: encryptedKey, updatedAt: new Date() })
+        .where(eq(zlibCredentials.userId, userId));
+    } else {
+      await this.db.insert(zlibCredentials).values({ userId, email, remixUserId, remixUserKey: encryptedKey });
+    }
   }
 
   async findByUserId(userId: number): Promise<{ email: string; remixUserId: string; remixUserKey: string } | null> {
