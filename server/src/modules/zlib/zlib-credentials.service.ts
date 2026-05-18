@@ -1,7 +1,7 @@
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { DB } from '../../db/db.module';
@@ -15,7 +15,7 @@ const IV_LENGTH = 12;
 const TAG_LENGTH = 16;
 
 @Injectable()
-export class ZlibCredentialsService {
+export class ZlibCredentialsService implements OnModuleInit {
   private readonly logger = new Logger(ZlibCredentialsService.name);
   private readonly key: Buffer | null;
 
@@ -31,6 +31,28 @@ export class ZlibCredentialsService {
         this.logger.warn('ZLIB_ENCRYPTION_KEY must be a 64-char hex string. Z-Library keys will be stored unencrypted.');
       }
       this.key = null;
+    }
+  }
+
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.db.execute(sql`
+        CREATE TABLE IF NOT EXISTS "zlib_credentials" (
+          "id" serial PRIMARY KEY NOT NULL,
+          "user_id" integer NOT NULL,
+          "email" varchar(255) NOT NULL,
+          "remix_user_id" varchar(100) NOT NULL,
+          "remix_user_key" text NOT NULL,
+          "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+          "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+        )
+      `);
+      await this.db.execute(sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS "zlib_credentials_user_id_uidx"
+        ON "zlib_credentials" ("user_id")
+      `);
+    } catch (err) {
+      this.logger.warn(`zlib_credentials table setup: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
