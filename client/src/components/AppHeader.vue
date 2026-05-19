@@ -115,6 +115,11 @@ async function fetchZlibQueueCount() {
   }
 }
 
+function onZlibClose() {
+  zlibOpen.value = false
+  fetchZlibQueueCount()
+}
+
 const searchFocused = ref(false)
 const mobileSearchOpen = ref(false)
 const desktopSearchInput = ref<HTMLInputElement | null>(null)
@@ -866,11 +871,5 @@ function formatBadgeClass(fmt: string): string {
   </header>
 
   <BookUploadModal v-if="uploadOpen" @close="uploadOpen = false" @uploaded="uploadOpen = false" />
-  <ZlibSearchModal
-    v-if="zlibOpen"
-    @close="
-      zlibOpen = false
-      fetchZlibQueueCount()
-    "
-  />
+  <ZlibSearchModal v-if="zlibOpen" @close="onZlibClose" />
 </template>
