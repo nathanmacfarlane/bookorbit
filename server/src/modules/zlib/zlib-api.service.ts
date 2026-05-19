@@ -1,5 +1,6 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { Readable } from 'stream';
+import { ZlibLimitReachedException } from './zlib-limit.exception';
 
 const ZLIB_BASE = 'https://z-library.im/eapi';
 
@@ -124,8 +125,23 @@ export class ZlibApiService {
       throw new Error(`Z-Library download request failed: ${dlRes.status}`);
     }
 
-    const json = (await dlRes.json()) as { file?: { downloadLink?: string; description?: string } };
+    const json = (await dlRes.json()) as {
+      file?: { downloadLink?: string; description?: string };
+      error?: string;
+      errorType?: string;
+      code?: number;
+    };
     this.logger.debug(`Z-Library download response: ${JSON.stringify(json)}`);
+
+    // Detect daily download limit errors
+    const isLimitError =
+      json.errorType === 'DailyDownloadLimitReached' ||
+      (typeof json.error === 'string' && /limit|quota|exceeded/i.test(json.error)) ||
+      json.code === 429;
+    if (isLimitError) {
+      throw new ZlibLimitReachedException();
+    }
+
     const downloadUrl = json.file?.downloadLink;
     if (!downloadUrl) {
       throw new Error('No download link returned by Z-Library');

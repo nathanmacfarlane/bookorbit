@@ -12,6 +12,7 @@ import { MAX_PROFILE_AVATAR_BYTES, useProfileAvatar } from '@/features/auth/comp
 import { useChangePasswordDialog } from '@/composables/useChangePasswordDialog'
 import SettingsPageHeader from './SettingsPageHeader.vue'
 import ZlibConnectCard from '@/features/zlib/components/ZlibConnectCard.vue'
+import ZlibQueuePanel from '@/features/zlib/components/ZlibQueuePanel.vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useOnboardingTour } from '@/features/onboarding/composables/useOnboardingTour'
 
@@ -489,8 +490,11 @@ function closeUnlinkDialog() {
   </div>
 
   <!-- Integrations section -->
-  <div class="mt-4">
+  <div class="mt-4 space-y-4">
     <ZlibConnectCard />
+    <section class="rounded-lg border border-border bg-card p-4 md:p-5 shadow-xs">
+      <ZlibQueuePanel />
+    </section>
   </div>
 
   <!-- OIDC Identity section -->

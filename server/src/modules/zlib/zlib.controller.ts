@@ -1,4 +1,18 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Inject, Post, Query, Res, UnauthorizedException } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  Param,
+  ParseIntPipe,
+  Post,
+  Query,
+  Res,
+  UnauthorizedException,
+} from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import { Permission } from '@bookorbit/types';
 import { sql } from 'drizzle-orm';
@@ -13,17 +27,23 @@ import type { RequestUser } from '../../common/types/request-user';
 import { ZlibConnectDto } from './dto/zlib-connect.dto';
 import { ZlibDownloadDto } from './dto/zlib-download.dto';
 import { ZlibSearchDto } from './dto/zlib-search.dto';
+import { ZlibQueueAddDto } from './dto/zlib-queue-add.dto';
 import { ZlibApiService } from './zlib-api.service';
 import { ZlibCredentialsService } from './zlib-credentials.service';
+import { ZlibQueueService } from './zlib-queue.service';
+import { ZlibLimitReachedException } from './zlib-limit.exception';
 import { BookDockIngestService } from '../book-dock/book-dock-ingest.service';
 
 type Db = NodePgDatabase<typeof schema>;
+
+const DAILY_LIMIT = 10;
 
 @Controller('zlib')
 export class ZlibController {
   constructor(
     private readonly zlibApi: ZlibApiService,
     private readonly credentials: ZlibCredentialsService,
+    private readonly queue: ZlibQueueService,
     private readonly bookDockIngest: BookDockIngestService,
     @Inject(DB) private readonly db: Db,
   ) {}
@@ -76,7 +96,23 @@ export class ZlibController {
   async status(@CurrentUser() user: RequestUser) {
     const creds = await this.credentials.findByUserId(user.id);
     if (!creds) return { connected: false };
-    return { connected: true, email: creds.email };
+
+    await this.credentials.resetCountIfExpired(user.id);
+    const fresh = await this.credentials.findByUserId(user.id);
+    const count = fresh?.dailyDownloadCount ?? 0;
+    const limitHitAt = fresh?.limitHitAt ?? null;
+    const isAtLimit = count >= DAILY_LIMIT || limitHitAt !== null;
+    const resetsAt = limitHitAt ? new Date(limitHitAt.getTime() + 24 * 60 * 60 * 1000) : null;
+
+    return {
+      connected: true,
+      email: creds.email,
+      downloadsToday: count,
+      remainingToday: Math.max(0, DAILY_LIMIT - count),
+      isAtLimit,
+      limitHitAt: limitHitAt?.toISOString() ?? null,
+      resetsAt: resetsAt?.toISOString() ?? null,
+    };
   }
 
   @Get('search')
@@ -94,10 +130,67 @@ export class ZlibController {
     const creds = await this.credentials.findByUserId(user.id);
     if (!creds) throw new UnauthorizedException('Z-Library not connected');
 
-    const { stream, filename } = await this.zlibApi.downloadStream(creds.remixUserId, creds.remixUserKey, creds.sessionCookies, dto.bookId, dto.hash);
+    // Check if limit already known to be hit
+    await this.credentials.resetCountIfExpired(user.id);
+    const fresh = await this.credentials.findByUserId(user.id);
+    if ((fresh?.dailyDownloadCount ?? 0) >= DAILY_LIMIT || fresh?.limitHitAt) {
+      return { limitReached: true, resetsAt: fresh?.limitHitAt ? new Date(fresh.limitHitAt.getTime() + 24 * 60 * 60 * 1000).toISOString() : null };
+    }
 
-    const resolvedFilename = dto.filename || filename;
-    const bookDockId = await this.bookDockIngest.ingestUpload(resolvedFilename, stream, user.id);
-    return { bookDockId };
+    try {
+      const { stream, filename } = await this.zlibApi.downloadStream(
+        creds.remixUserId,
+        creds.remixUserKey,
+        creds.sessionCookies,
+        dto.bookId,
+        dto.hash,
+      );
+      const resolvedFilename = dto.filename || filename;
+      const bookDockId = await this.bookDockIngest.ingestUpload(resolvedFilename, stream, user.id);
+      await this.credentials.incrementDownloadCount(user.id);
+      return { bookDockId };
+    } catch (err) {
+      if (err instanceof ZlibLimitReachedException) {
+        await this.credentials.markLimitHit(user.id);
+        const limitHitAt = new Date();
+        return {
+          limitReached: true,
+          resetsAt: new Date(limitHitAt.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+        };
+      }
+      throw err;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Queue endpoints
+  // -------------------------------------------------------------------------
+
+  @Get('queue')
+  @RequirePermission(Permission.LibraryUpload)
+  async getQueue(@CurrentUser() user: RequestUser) {
+    return this.queue.getQueue(user.id);
+  }
+
+  @Post('queue')
+  @HttpCode(HttpStatus.CREATED)
+  @RequirePermission(Permission.LibraryUpload)
+  async addToQueue(@Body() dto: ZlibQueueAddDto, @CurrentUser() user: RequestUser) {
+    const item = await this.queue.addToQueue(user.id, dto.bookId, dto.hash, dto.title, dto.author ?? '', dto.format ?? 'epub', dto.cover ?? null);
+    return item;
+  }
+
+  @Delete('queue/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission(Permission.LibraryUpload)
+  async removeFromQueue(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: RequestUser) {
+    await this.queue.removeFromQueue(user.id, id);
+  }
+
+  @Post('queue/:id/retry')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission(Permission.LibraryUpload)
+  async retryQueueItem(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: RequestUser) {
+    await this.queue.retryFailed(user.id, id);
   }
 }

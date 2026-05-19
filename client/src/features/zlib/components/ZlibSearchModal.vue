@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { BookOpen, Loader2, Plus, Search, X } from 'lucide-vue-next'
+import { onMounted, ref, watch } from 'vue'
+import { BookOpen, Clock, Loader2, Plus, Search, X } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { api } from '@/lib/api'
 
@@ -16,6 +16,14 @@ interface ZlibBook {
   cover: string
 }
 
+interface ZlibStatus {
+  connected: boolean
+  downloadsToday: number
+  remainingToday: number
+  isAtLimit: boolean
+  resetsAt: string | null
+}
+
 const emit = defineEmits<{
   close: []
 }>()
@@ -28,9 +36,22 @@ const searching = ref(false)
 const searchError = ref<string | null>(null)
 const notConnected = ref(false)
 const addingId = ref<string | null>(null)
+const queuingId = ref<string | null>(null)
 const hasSearched = ref(false)
+const status = ref<ZlibStatus | null>(null)
 
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
+
+onMounted(fetchStatus)
+
+async function fetchStatus() {
+  try {
+    const res = await api('/api/v1/zlib/status')
+    if (res.ok) status.value = await res.json()
+  } catch {
+    // non-critical
+  }
+}
 
 function formatBytes(bytes: number): string {
   if (!bytes) return ''
@@ -47,6 +68,15 @@ function formatExtClass(ext: string): string {
     fb2: 'bg-teal-500/15 text-teal-600 dark:text-teal-400',
   }
   return map[ext?.toLowerCase()] ?? 'bg-muted text-muted-foreground/85'
+}
+
+function formatResetsIn(resetsAt: string): string {
+  const diff = new Date(resetsAt).getTime() - Date.now()
+  if (diff <= 0) return 'soon'
+  const h = Math.floor(diff / 3_600_000)
+  const m = Math.floor((diff % 3_600_000) / 60_000)
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
 }
 
 async function doSearch() {
@@ -118,11 +148,55 @@ async function addToLibrary(book: ZlibBook) {
       return
     }
 
+    const data = await res.json()
+
+    if (data.limitReached) {
+      // Auto-queue instead
+      await addToQueue(book, true)
+      await fetchStatus()
+      return
+    }
+
+    await fetchStatus()
     toast.success(`"${book.title}" added to Book Dock`)
   } catch (err) {
     toast.error(err instanceof Error ? err.message : 'Failed to add book')
   } finally {
     addingId.value = null
+  }
+}
+
+async function addToQueue(book: ZlibBook, silent = false) {
+  queuingId.value = book.id
+  try {
+    const res = await api('/api/v1/zlib/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bookId: String(book.id),
+        hash: book.hash,
+        title: book.title,
+        author: book.author,
+        format: book.extension || 'epub',
+        cover: book.cover || null,
+      }),
+    })
+
+    if (!res.ok) {
+      const payload = (await res.json().catch(() => null)) as { message?: string } | null
+      toast.error(payload?.message ?? 'Failed to queue book')
+      return
+    }
+
+    if (silent) {
+      toast.info(`Daily limit reached — "${book.title}" queued for tomorrow`)
+    } else {
+      toast.success(`"${book.title}" added to download queue`)
+    }
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : 'Failed to queue book')
+  } finally {
+    queuingId.value = null
   }
 }
 
@@ -153,6 +227,14 @@ function handleKeydown(e: KeyboardEvent) {
           >
             <X :size="15" />
           </button>
+        </div>
+
+        <!-- Limit banner -->
+        <div v-if="status?.isAtLimit" class="flex items-center gap-2 px-5 py-2.5 bg-amber-500/10 border-b border-amber-500/20 shrink-0">
+          <Clock :size="13" class="text-amber-600 dark:text-amber-400 shrink-0" />
+          <p class="text-xs text-amber-700 dark:text-amber-400">
+            Daily limit reached · resets in {{ status.resetsAt ? formatResetsIn(status.resetsAt) : '24h' }} · books will be queued automatically
+          </p>
         </div>
 
         <!-- Search bar -->
@@ -187,6 +269,11 @@ function handleKeydown(e: KeyboardEvent) {
             >
               Search
             </button>
+          </div>
+
+          <!-- Download counter -->
+          <div v-if="status?.connected && !status.isAtLimit" class="flex justify-end">
+            <span class="text-xs text-muted-foreground"> {{ status.remainingToday }} of 10 downloads remaining today </span>
           </div>
         </div>
 
@@ -261,17 +348,33 @@ function handleKeydown(e: KeyboardEvent) {
                 </div>
               </div>
 
-              <!-- Add button -->
-              <button
-                type="button"
-                class="shrink-0 flex items-center gap-1.5 rounded-md border border-primary/40 bg-primary/5 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/15 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                :disabled="addingId !== null"
-                @click="addToLibrary(book)"
-              >
-                <Loader2 v-if="addingId === book.id" :size="12" class="animate-spin" />
-                <Plus v-else :size="12" />
-                {{ addingId === book.id ? 'Adding...' : 'Add' }}
-              </button>
+              <!-- Action buttons -->
+              <div class="shrink-0 flex flex-col gap-1.5">
+                <!-- Download Now (hidden when at limit) -->
+                <button
+                  v-if="!status?.isAtLimit"
+                  type="button"
+                  class="flex items-center gap-1.5 rounded-md border border-primary/40 bg-primary/5 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/15 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="addingId !== null || queuingId !== null"
+                  @click="addToLibrary(book)"
+                >
+                  <Loader2 v-if="addingId === book.id" :size="12" class="animate-spin" />
+                  <Plus v-else :size="12" />
+                  {{ addingId === book.id ? 'Adding...' : 'Add' }}
+                </button>
+
+                <!-- Queue -->
+                <button
+                  type="button"
+                  class="flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="addingId !== null || queuingId !== null"
+                  @click="addToQueue(book)"
+                >
+                  <Loader2 v-if="queuingId === book.id" :size="12" class="animate-spin" />
+                  <Clock v-else :size="12" />
+                  {{ queuingId === book.id ? 'Queuing...' : 'Queue' }}
+                </button>
+              </div>
             </div>
           </div>
         </div>
