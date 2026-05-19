@@ -520,6 +520,10 @@ function formatBadgeClass(fmt: string): string {
               <Upload :size="15" class="mr-2 text-muted-foreground" />
               Upload books
             </DropdownMenuItem>
+            <DropdownMenuItem v-if="hasPermission('library_upload')" @click="zlibOpen = true">
+              <Search :size="15" class="mr-2 text-muted-foreground" />
+              Search Z-Library
+            </DropdownMenuItem>
 
             <DropdownMenuSeparator />
 
