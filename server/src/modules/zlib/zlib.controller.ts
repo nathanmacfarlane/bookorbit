@@ -45,7 +45,7 @@ export class ZlibController {
   @HttpCode(HttpStatus.OK)
   async connect(@Body() dto: ZlibConnectDto, @CurrentUser() user: RequestUser) {
     const result = await this.zlibApi.login(dto.email, dto.password);
-    await this.credentials.upsert(user.id, result.email, result.remixUserId, result.remixUserKey);
+    await this.credentials.upsert(user.id, result.email, result.remixUserId, result.remixUserKey, result.sessionCookies);
     return { connected: true, email: result.email };
   }
 
@@ -94,7 +94,7 @@ export class ZlibController {
     const creds = await this.credentials.findByUserId(user.id);
     if (!creds) throw new UnauthorizedException('Z-Library not connected');
 
-    const { stream, filename } = await this.zlibApi.downloadStream(creds.remixUserId, creds.remixUserKey, dto.bookId, dto.hash);
+    const { stream, filename } = await this.zlibApi.downloadStream(creds.remixUserId, creds.remixUserKey, creds.sessionCookies, dto.bookId, dto.hash);
 
     const resolvedFilename = dto.filename || filename;
     const bookDockId = await this.bookDockIngest.ingestUpload(resolvedFilename, stream, user.id);

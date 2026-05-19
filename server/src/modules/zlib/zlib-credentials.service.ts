@@ -51,26 +51,29 @@ export class ZlibCredentialsService implements OnModuleInit {
         CREATE UNIQUE INDEX IF NOT EXISTS "zlib_credentials_user_id_uidx"
         ON "zlib_credentials" ("user_id")
       `);
+      await this.db.execute(sql`
+        ALTER TABLE "zlib_credentials" ADD COLUMN IF NOT EXISTS "session_cookies" text NOT NULL DEFAULT ''
+      `);
     } catch (err) {
       this.logger.warn(`zlib_credentials table setup: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  async upsert(userId: number, email: string, remixUserId: string, remixUserKey: string): Promise<void> {
+  async upsert(userId: number, email: string, remixUserId: string, remixUserKey: string, sessionCookies: string): Promise<void> {
     const encryptedKey = this.encrypt(remixUserKey);
     const existing = await this.db.select({ id: zlibCredentials.id }).from(zlibCredentials).where(eq(zlibCredentials.userId, userId)).limit(1);
 
     if (existing.length > 0) {
       await this.db
         .update(zlibCredentials)
-        .set({ email, remixUserId, remixUserKey: encryptedKey, updatedAt: new Date() })
+        .set({ email, remixUserId, remixUserKey: encryptedKey, sessionCookies, updatedAt: new Date() })
         .where(eq(zlibCredentials.userId, userId));
     } else {
-      await this.db.insert(zlibCredentials).values({ userId, email, remixUserId, remixUserKey: encryptedKey });
+      await this.db.insert(zlibCredentials).values({ userId, email, remixUserId, remixUserKey: encryptedKey, sessionCookies });
     }
   }
 
-  async findByUserId(userId: number): Promise<{ email: string; remixUserId: string; remixUserKey: string } | null> {
+  async findByUserId(userId: number): Promise<{ email: string; remixUserId: string; remixUserKey: string; sessionCookies: string } | null> {
     const rows = await this.db.select().from(zlibCredentials).where(eq(zlibCredentials.userId, userId)).limit(1);
     const row = rows[0];
     if (!row) return null;
@@ -79,6 +82,7 @@ export class ZlibCredentialsService implements OnModuleInit {
       email: row.email,
       remixUserId: row.remixUserId,
       remixUserKey: this.decrypt(row.remixUserKey),
+      sessionCookies: row.sessionCookies ?? '',
     };
   }
 

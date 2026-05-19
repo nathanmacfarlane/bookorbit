@@ -7,6 +7,7 @@ export interface ZlibLoginResult {
   email: string;
   remixUserId: string;
   remixUserKey: string;
+  sessionCookies: string;
 }
 
 export interface ZlibBook {
@@ -61,10 +62,14 @@ export class ZlibApiService {
       throw new UnauthorizedException('Invalid Z-Library credentials');
     }
 
+    const setCookieHeaders = res.headers.getSetCookie?.() ?? [];
+    const sessionCookies = setCookieHeaders.map((c) => c.split(';')[0]).join('; ');
+
     return {
       email: json.user.email ?? email,
       remixUserId: String(json.user.id),
       remixUserKey: json.user.remix_userkey,
+      sessionCookies,
     };
   }
 
@@ -98,19 +103,29 @@ export class ZlibApiService {
     };
   }
 
-  async downloadStream(remixUserId: string, remixUserKey: string, bookId: string, hash: string): Promise<{ stream: Readable; filename: string }> {
-    const headers = {
+  async downloadStream(
+    remixUserId: string,
+    remixUserKey: string,
+    sessionCookies: string,
+    bookId: string,
+    hash: string,
+  ): Promise<{ stream: Readable; filename: string }> {
+    const headers: Record<string, string> = {
       'User-Agent': 'Mozilla/5.0',
       'remix-userid': remixUserId,
       'remix-userkey': remixUserKey,
     };
+    if (sessionCookies) headers['Cookie'] = sessionCookies;
 
     const dlRes = await fetch(`${ZLIB_BASE}/book/${bookId}/${hash}/file/download`, { headers });
     if (!dlRes.ok) {
+      const body = await dlRes.text().catch(() => '');
+      this.logger.error(`Z-Library download API failed: ${dlRes.status} — ${body}`);
       throw new Error(`Z-Library download request failed: ${dlRes.status}`);
     }
 
     const json = (await dlRes.json()) as { file?: { downloadLink?: string; description?: string } };
+    this.logger.debug(`Z-Library download response: ${JSON.stringify(json)}`);
     const downloadUrl = json.file?.downloadLink;
     if (!downloadUrl) {
       throw new Error('No download link returned by Z-Library');

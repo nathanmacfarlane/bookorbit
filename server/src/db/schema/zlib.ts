@@ -12,6 +12,7 @@ export const zlibCredentials = pgTable(
     email: varchar('email', { length: 255 }).notNull(),
     remixUserId: varchar('remix_user_id', { length: 100 }).notNull(),
     remixUserKey: text('remix_user_key').notNull(), // encrypted AES-256-GCM
+    sessionCookies: text('session_cookies').notNull().default(''),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .defaultNow()
