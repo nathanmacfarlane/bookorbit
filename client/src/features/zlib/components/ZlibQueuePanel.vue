@@ -22,6 +22,7 @@ const items = ref<QueueItem[]>([])
 const loading = ref(false)
 const removingId = ref<number | null>(null)
 const retryingId = ref<number | null>(null)
+const running = ref(false)
 
 const pending = computed(() => items.value.filter((i) => i.status === 'pending' || i.status === 'processing'))
 const completed = computed(() => items.value.filter((i) => i.status === 'completed'))
@@ -50,6 +51,18 @@ async function remove(item: QueueItem) {
     toast.error('Failed to remove item')
   } finally {
     removingId.value = null
+  }
+}
+
+async function runNow() {
+  running.value = true
+  try {
+    await api('/api/v1/zlib/queue/run', { method: 'POST' })
+    setTimeout(fetchQueue, 2000)
+  } catch {
+    // ignore
+  } finally {
+    running.value = false
   }
 }
 
@@ -91,15 +104,27 @@ function estimatedDays(position: number): string {
         <h3 class="text-sm font-semibold text-foreground">Download Queue</h3>
         <p class="text-xs text-muted-foreground mt-0.5">Books queued for automatic download (up to 10/day)</p>
       </div>
-      <button
-        class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-muted transition-colors"
-        :disabled="loading"
-        @click="fetchQueue"
-      >
-        <Loader2 v-if="loading" :size="13" class="animate-spin" />
-        <RefreshCw v-else :size="13" />
-        Refresh
-      </button>
+      <div class="flex items-center gap-1.5">
+        <button
+          class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-muted transition-colors"
+          :disabled="loading"
+          @click="fetchQueue"
+        >
+          <Loader2 v-if="loading" :size="13" class="animate-spin" />
+          <RefreshCw v-else :size="13" />
+          Refresh
+        </button>
+        <button
+          v-if="pending.length > 0"
+          class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+          :disabled="running"
+          @click="runNow"
+        >
+          <Loader2 v-if="running" :size="13" class="animate-spin" />
+          <RefreshCw v-else :size="13" />
+          {{ running ? 'Running...' : 'Run Now' }}
+        </button>
+      </div>
     </div>
 
     <!-- Empty -->

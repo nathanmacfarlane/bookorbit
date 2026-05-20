@@ -193,4 +193,11 @@ export class ZlibController {
   async retryQueueItem(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: RequestUser) {
     await this.queue.retryFailed(user.id, id);
   }
+
+  @Post('queue/run')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission(Permission.LibraryUpload)
+  runQueue(@CurrentUser() user: RequestUser) {
+    void this.queue.drainForUser(user.id);
+  }
 }
