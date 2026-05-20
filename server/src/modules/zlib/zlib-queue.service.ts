@@ -100,19 +100,17 @@ export class ZlibQueueService {
     const creds = await this.credentials.findByUserId(userId);
     if (!creds) return;
 
-    // Always clear our internal limit flag and counter before attempting —
-    // Z-Library resets on a fixed daily schedule (not 24h from when we hit the
-    // limit), so we let Z-Lib's actual response be the source of truth.
-    if (creds.limitHitAt) {
-      await this.credentials.resetCountIfExpired(userId, true);
-      this.logger.log(`[queue] userId=${userId} clearing internal limit flag, will let Z-Lib decide`);
-    }
+    // Always reset our internal counters before attempting — Z-Library resets
+    // on a fixed daily schedule, not 24h from when we hit the limit. We let
+    // Z-Lib's actual API response be the source of truth for whether we're limited.
+    await this.credentials.resetDailyCount(userId);
+    this.logger.log(`[queue] userId=${userId} reset local counters, will let Z-Lib decide`);
 
-    // Re-fetch after potential reset
+    // Re-fetch after reset
     const freshCreds = await this.credentials.findByUserId(userId);
     if (!freshCreds) return;
 
-    const remaining = DAILY_LIMIT - (freshCreds.dailyDownloadCount ?? 0);
+    const remaining = DAILY_LIMIT;
     if (remaining <= 0) return;
 
     // Get oldest pending items up to remaining quota

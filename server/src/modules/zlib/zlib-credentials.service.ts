@@ -139,6 +139,13 @@ export class ZlibCredentialsService implements OnModuleInit {
     await this.db.update(zlibCredentials).set({ limitHitAt: new Date(), updatedAt: new Date() }).where(eq(zlibCredentials.userId, userId));
   }
 
+  async resetDailyCount(userId: number): Promise<void> {
+    await this.db
+      .update(zlibCredentials)
+      .set({ dailyDownloadCount: 0, limitHitAt: null, updatedAt: new Date() })
+      .where(eq(zlibCredentials.userId, userId));
+  }
+
   async resetCountIfExpired(userId: number, force = false): Promise<boolean> {
     const creds = await this.findByUserId(userId);
     if (!creds?.limitHitAt) return false;
