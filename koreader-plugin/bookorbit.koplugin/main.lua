@@ -28,12 +28,18 @@ local BookOrbit = WidgetContainer:extend{
 
 function BookOrbit:init()
     self.settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/bookorbit.lua")
-    self.ui.menu:registerToMainMenu(self)
-end
+    self.downloaded_ids = {}
+    if self.ui and self.ui.menu then
+        logger.info("BookOrbit: registering to main menu")
+        self.ui.menu:registerToMainMenu(self)
+    else
+        logger.warn("BookOrbit: no ui.menu available during init, skipping menu registration")
+    end
 
 function BookOrbit:addToMainMenu(menu_items)
     menu_items.bookorbit = {
         text = "BookOrbit",
+        sorting_hint = "tools",
         sub_item_table = {
             {
                 text = "Search Library",
@@ -286,37 +292,94 @@ function BookOrbit:doSearch(q)
     self:showResults(data)
 end
 
-function BookOrbit:showResults(books)
+function BookOrbit:safeTitle(title)
+    return (title or "book"):gsub('[/\\:*?"<>|%%]', "_")
+end
+
+function BookOrbit:bookExistsOnDevice(title, formats)
+    local home_dir = G_reader_settings:readSetting("home_dir") or "/mnt/us/documents"
+    local safe = self:safeTitle(title)
+    local exts = (formats and #formats > 0) and formats or { "epub", "mobi", "azw3", "fb2", "pdf" }
+    for _, ext in ipairs(exts) do
+        local path = home_dir .. "/" .. safe .. "." .. ext:lower()
+        local f = io.open(path, "r")
+        if f then
+            f:close()
+            return true
+        end
+    end
+    return false
+end
+
+function BookOrbit:buildResultItems(books)
     local item_table = {}
+
+    -- "New Search" at the top
+    table.insert(item_table, {
+        text = "[ New Search ]",
+        bold = true,
+        is_new_search = true,
+    })
+
     for _, book in ipairs(books) do
         local author_str = table.concat(book.authors or {}, ", ")
         local fmt_str    = table.concat(book.formats or {}, " · "):upper()
-        local subtitle   = author_str ~= "" and author_str or "Unknown author"
-        if fmt_str ~= "" then subtitle = subtitle .. "  [" .. fmt_str .. "]" end
-
+        local label = book.title or "(Untitled)"
+        if self.downloaded_ids[tostring(book.id)] or self:bookExistsOnDevice(book.title, book.formats) then
+            label = "✓ " .. label
+        end
         table.insert(item_table, {
-            text      = book.title or "(Untitled)",
+            text      = label,
             mandatory = fmt_str ~= "" and fmt_str or nil,
             book_id   = book.id,
             book_title = book.title or "book",
+            book_data  = book,
         })
     end
 
-    local results_menu
-    results_menu = Menu:new{
+    return item_table
+end
+
+function BookOrbit:showResults(books)
+    -- Reset downloaded tracking for a fresh search session
+    self.downloaded_ids = {}
+    self.current_books = books
+
+    local item_table = self:buildResultItems(books)
+
+    self.results_menu = Menu:new{
         title      = "BookOrbit Results",
         item_table = item_table,
         onMenuSelect = function(_, item)
-            UIManager:close(results_menu)
-            self:selectBook(item)
+            if item.is_new_search then
+                UIManager:close(self.results_menu)
+                self.results_menu = nil
+                self:showSearch()
+                return
+            end
+            -- Don't close the menu — keep it open for multiple downloads
+            self:selectBook(item, function()
+                -- Mark as downloaded and refresh the list
+                self.downloaded_ids[tostring(item.book_id)] = true
+                local new_items = self:buildResultItems(self.current_books)
+                self.results_menu:switchItemTable("BookOrbit Results", new_items)
+            end)
         end,
     }
-    UIManager:show(results_menu)
+    UIManager:show(self.results_menu)
 end
 
 -- Download ------------------------------------------------------------------
 
-function BookOrbit:selectBook(item)
+function BookOrbit:selectBook(item, on_success)
+    -- If we have cover/format info in book_data, show detail view
+    -- Otherwise fall back to fetching from API
+    local book_data = item.book_data
+    if book_data and book_data.files and #book_data.files > 0 then
+        self:handleBookFiles(book_data.files, item.book_title, book_data.cover, on_success)
+        return
+    end
+
     UIManager:show(InfoMessage:new{ text = "Loading book info...", timeout = 1 })
 
     local data, err, code = self:request("GET", "/api/v1/books/" .. item.book_id, nil)
@@ -330,7 +393,11 @@ function BookOrbit:selectBook(item)
         return
     end
 
-    local files = data.files or {}
+    local cover_url = data.cover or nil
+    self:handleBookFiles(data.files or {}, item.book_title, cover_url, on_success)
+end
+
+function BookOrbit:handleBookFiles(files, title, cover_url, on_success)
     -- Filter to ebook formats only (skip audio)
     local ebook_files = {}
     for _, f in ipairs(files) do
@@ -349,15 +416,14 @@ function BookOrbit:selectBook(item)
         return (FORMAT_PRIORITY[a.format] or 99) < (FORMAT_PRIORITY[b.format] or 99)
     end)
 
-    -- If multiple formats, ask the user to pick
     if #ebook_files == 1 then
-        self:downloadFile(ebook_files[1], item.book_title)
+        self:showBookDetail(ebook_files[1], title, cover_url, on_success)
     else
-        self:pickFormat(ebook_files, item.book_title)
+        self:pickFormat(ebook_files, title, cover_url, on_success)
     end
 end
 
-function BookOrbit:pickFormat(files, title)
+function BookOrbit:pickFormat(files, title, cover_url, on_success)
     local item_table = {}
     for _, f in ipairs(files) do
         table.insert(item_table, {
@@ -372,22 +438,38 @@ function BookOrbit:pickFormat(files, title)
         item_table = item_table,
         onMenuSelect = function(_, item)
             UIManager:close(fmt_menu)
-            self:downloadFile(item.file, title)
+            self:showBookDetail(item.file, title, cover_url, on_success)
         end,
     }
     UIManager:show(fmt_menu)
 end
 
-function BookOrbit:downloadFile(file, title)
+
+function BookOrbit:showBookDetail(file, title, cover_url, on_success)
+    local ConfirmBox = require("ui/widget/confirmbox")
+    local ext = (file.format or "epub"):upper()
+    UIManager:show(ConfirmBox:new{
+        text        = (title or "(Untitled)") .. "\n\n" .. ext,
+        ok_text     = "Download",
+        cancel_text = "Cancel",
+        ok_callback = function()
+            self:downloadFile(file, title, on_success)
+        end,
+    })
+end
+
+function BookOrbit:downloadFile(file, title, on_success)
     local ext        = file.format or "epub"
-    local safe_title = (title or "book"):gsub('[/\\:*?"<>|%%]', "_")
-    local home_dir   = G_reader_settings:readSetting("home_dir") or "/mnt/onboard"
+    local safe_title = self:safeTitle(title)
+    local home_dir   = G_reader_settings:readSetting("home_dir") or "/mnt/us/documents"
     local dest_path  = home_dir .. "/" .. safe_title .. "." .. ext
 
-    UIManager:show(InfoMessage:new{
-        text = "Downloading " .. safe_title .. "." .. ext .. "...",
-        timeout = 2,
-    })
+    -- Show persistent loading indicator (no timeout)
+    local loading = InfoMessage:new{
+        text = "Downloading…\n\n" .. safe_title .. "." .. ext,
+    }
+    UIManager:show(loading)
+    UIManager:forceRePaint()
 
     local url     = self:serverUrl() .. "/api/v1/books/files/" .. file.id .. "/download"
     local token   = self:getToken()
@@ -398,6 +480,7 @@ function BookOrbit:downloadFile(file, title)
 
     local f, open_err = io.open(dest_path, "wb")
     if not f then
+        UIManager:close(loading)
         UIManager:show(InfoMessage:new{
             text = "Cannot write file: " .. (open_err or dest_path),
         })
@@ -413,6 +496,8 @@ function BookOrbit:downloadFile(file, title)
     }
     -- ltn12.sink.file closes the file automatically
 
+    UIManager:close(loading)
+
     if not ok or (tonumber(code) ~= 200 and tonumber(code) ~= 206) then
         os.remove(dest_path)
         if tonumber(code) == 401 then
@@ -425,10 +510,29 @@ function BookOrbit:downloadFile(file, title)
         return
     end
 
+    -- Force full e-ink refresh to clear artifacts
+    UIManager:setDirty("all", "full")
+
+    -- Refresh file manager so the book appears immediately
+    local ok_fm, FileManager = pcall(require, "apps/filemanager/filemanager")
+    if ok_fm and FileManager.instance then
+        local fc = FileManager.instance.file_chooser
+        if fc and fc.refreshPath then
+            fc:refreshPath()
+        else
+            FileManager.instance:onRefresh()
+        end
+    end
+
     UIManager:show(InfoMessage:new{
-        text = "Downloaded!\n" .. safe_title .. "." .. ext .. "\nSaved to " .. home_dir,
+        text    = "Done!\n\n" .. safe_title .. "." .. ext .. "\nSaved to " .. home_dir,
         timeout = 3,
     })
+
+    -- Notify caller (e.g. to mark as downloaded in results list)
+    if on_success then
+        on_success()
+    end
 end
 
 return BookOrbit
