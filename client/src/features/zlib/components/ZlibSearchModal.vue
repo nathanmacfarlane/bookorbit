@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { BookOpen, Clock, Loader2, Plus, Search, X } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
+import { useRouter } from 'vue-router'
 import { api } from '@/lib/api'
 
 interface ZlibBook {
@@ -28,6 +29,8 @@ const emit = defineEmits<{
   close: []
 }>()
 
+const router = useRouter()
+
 const query = ref('')
 const formatFilter = ref('')
 const results = ref<ZlibBook[]>([])
@@ -39,6 +42,7 @@ const addingId = ref<string | null>(null)
 const queuingId = ref<string | null>(null)
 const hasSearched = ref(false)
 const status = ref<ZlibStatus | null>(null)
+const queueCount = ref(0)
 
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
 
@@ -47,10 +51,30 @@ onMounted(fetchStatus)
 async function fetchStatus() {
   try {
     const res = await api('/api/v1/zlib/status')
-    if (res.ok) status.value = await res.json()
+    if (res.ok) {
+      status.value = await res.json()
+      if (status.value?.isAtLimit) fetchQueueCount()
+    }
   } catch {
     // non-critical
   }
+}
+
+async function fetchQueueCount() {
+  try {
+    const res = await api('/api/v1/zlib/queue')
+    if (res.ok) {
+      const items: { status: string }[] = await res.json()
+      queueCount.value = items.filter((i) => i.status === 'pending' || i.status === 'processing').length
+    }
+  } catch {
+    // non-critical
+  }
+}
+
+function goToQueue() {
+  emit('close')
+  router.push({ name: 'settings-account' })
 }
 
 function formatBytes(bytes: number): string {
@@ -193,6 +217,7 @@ async function addToQueue(book: ZlibBook, silent = false) {
     } else {
       toast.success(`"${book.title}" added to download queue`)
     }
+    fetchQueueCount()
   } catch (err) {
     toast.error(err instanceof Error ? err.message : 'Failed to queue book')
   } finally {
@@ -230,11 +255,23 @@ function handleKeydown(e: KeyboardEvent) {
         </div>
 
         <!-- Limit banner -->
-        <div v-if="status?.isAtLimit" class="flex items-center gap-2 px-5 py-2.5 bg-amber-500/10 border-b border-amber-500/20 shrink-0">
-          <Clock :size="13" class="text-amber-600 dark:text-amber-400 shrink-0" />
-          <p class="text-xs text-amber-700 dark:text-amber-400">
-            Daily limit reached · resets in {{ status.resetsAt ? formatResetsIn(status.resetsAt) : '24h' }} · books will be queued automatically
-          </p>
+        <div
+          v-if="status?.isAtLimit"
+          class="flex items-center justify-between gap-2 px-5 py-2.5 bg-amber-500/10 border-b border-amber-500/20 shrink-0"
+        >
+          <div class="flex items-center gap-2 min-w-0">
+            <Clock :size="13" class="text-amber-600 dark:text-amber-400 shrink-0" />
+            <p class="text-xs text-amber-700 dark:text-amber-400 truncate">
+              Daily limit reached · resets in {{ status.resetsAt ? formatResetsIn(status.resetsAt) : '24h' }} ·
+              {{ queueCount > 0 ? `${queueCount} book${queueCount === 1 ? '' : 's'} queued` : 'books will be queued automatically' }}
+            </p>
+          </div>
+          <button
+            class="shrink-0 text-xs font-medium text-amber-700 dark:text-amber-400 underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-300 transition-colors"
+            @click="goToQueue"
+          >
+            View queue
+          </button>
         </div>
 
         <!-- Search bar -->
