@@ -100,15 +100,12 @@ export class ZlibQueueService {
     const creds = await this.credentials.findByUserId(userId);
     if (!creds) return;
 
-    // Reset count if 24h has passed since limit was hit
+    // Always clear our internal limit flag and counter before attempting —
+    // Z-Library resets on a fixed daily schedule (not 24h from when we hit the
+    // limit), so we let Z-Lib's actual response be the source of truth.
     if (creds.limitHitAt) {
-      const reset = await this.credentials.resetCountIfExpired(userId);
-      if (!reset) {
-        const resetsAt = new Date(creds.limitHitAt.getTime() + 24 * 60 * 60 * 1000);
-        this.logger.debug(`[queue] userId=${userId} still at limit, resets at ${resetsAt.toISOString()}`);
-        return;
-      }
-      this.logger.log(`[queue] userId=${userId} limit reset, resuming queue drain`);
+      await this.credentials.resetCountIfExpired(userId, true);
+      this.logger.log(`[queue] userId=${userId} clearing internal limit flag, will let Z-Lib decide`);
     }
 
     // Re-fetch after potential reset
