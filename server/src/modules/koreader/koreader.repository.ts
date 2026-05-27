@@ -63,12 +63,13 @@ export class KoreaderRepository {
 
     if (byFileHashHistory) return byFileHashHistory;
 
-    // Fallback: match by filename (for clients like Crosspoint that send filename instead of hash)
+    // Fallback: match by MD5(filename) for clients like Crosspoint that use "sync by filename" mode.
+    // KoReader's getFileNameDigest() sends md5(basename(file)), not the raw filename.
     const [byFilename] = await this.db
       .select({ id: schema.bookFiles.id, bookId: schema.bookFiles.bookId, libraryId: schema.books.libraryId })
       .from(schema.bookFiles)
       .innerJoin(schema.books, eq(schema.books.id, schema.bookFiles.bookId))
-      .where(and(sql`split_part(${schema.bookFiles.absolutePath}, '/', -1) = ${hash}`, libraryFilter))
+      .where(and(sql`md5(split_part(${schema.bookFiles.absolutePath}, '/', -1)) = ${hash}`, libraryFilter))
       .limit(1);
 
     if (byFilename) return byFilename;
