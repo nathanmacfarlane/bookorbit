@@ -77,21 +77,9 @@ export class ZlibController {
     const creds = await this.credentials.findByUserId(user.id);
     if (!creds) return { connected: false };
 
-    await this.credentials.resetCountIfExpired(user.id);
-    const fresh = await this.credentials.findByUserId(user.id);
-    const count = fresh?.dailyDownloadCount ?? 0;
-    const limitHitAt = fresh?.limitHitAt ?? null;
-    const isAtLimit = count >= DAILY_LIMIT || limitHitAt !== null;
-    const resetsAt = limitHitAt ? new Date(limitHitAt.getTime() + 24 * 60 * 60 * 1000) : null;
-
     return {
       connected: true,
       email: creds.email,
-      downloadsToday: count,
-      remainingToday: Math.max(0, DAILY_LIMIT - count),
-      isAtLimit,
-      limitHitAt: limitHitAt?.toISOString() ?? null,
-      resetsAt: resetsAt?.toISOString() ?? null,
     };
   }
 
