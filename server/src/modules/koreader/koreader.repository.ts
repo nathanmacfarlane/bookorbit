@@ -63,6 +63,16 @@ export class KoreaderRepository {
 
     if (byFileHashHistory) return byFileHashHistory;
 
+    // Fallback: match by filename (for clients like Crosspoint that send filename instead of hash)
+    const [byFilename] = await this.db
+      .select({ id: schema.bookFiles.id, bookId: schema.bookFiles.bookId, libraryId: schema.books.libraryId })
+      .from(schema.bookFiles)
+      .innerJoin(schema.books, eq(schema.books.id, schema.bookFiles.bookId))
+      .where(and(sql`split_part(${schema.bookFiles.absolutePath}, '/', -1) = ${hash}`, libraryFilter))
+      .limit(1);
+
+    if (byFilename) return byFilename;
+
     return null;
   }
 
