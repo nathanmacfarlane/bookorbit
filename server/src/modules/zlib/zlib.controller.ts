@@ -1,17 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Inject,
-  Post,
-  Query,
-  Res,
-  TooManyRequestsException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpException, HttpStatus, Inject, Post, Query, Res, UnauthorizedException } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import { Permission } from '@bookorbit/types';
 import { sql } from 'drizzle-orm';
@@ -129,7 +116,7 @@ export class ZlibController {
     await this.credentials.resetCountIfExpired(user.id);
     const fresh = await this.credentials.findByUserId(user.id);
     if ((fresh?.dailyDownloadCount ?? 0) >= DAILY_LIMIT || fresh?.limitHitAt) {
-      throw new TooManyRequestsException('Daily download limit reached. Try again tomorrow.');
+      throw new HttpException('Daily download limit reached. Try again tomorrow.', HttpStatus.TOO_MANY_REQUESTS);
     }
 
     try {
@@ -147,7 +134,7 @@ export class ZlibController {
     } catch (err) {
       if (err instanceof ZlibLimitReachedException) {
         await this.credentials.markLimitHit(user.id);
-        throw new TooManyRequestsException('Daily download limit reached. Try again tomorrow.');
+        throw new HttpException('Daily download limit reached. Try again tomorrow.', HttpStatus.TOO_MANY_REQUESTS);
       }
       throw err;
     }
