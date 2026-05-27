@@ -135,6 +135,10 @@ export class KoreaderService {
     await this.repo.upsertReadingProgress(bookFile.id, userId, bookorbitPercentage);
     await this.userBookStatusService.autoUpdate(userId, bookFile.bookId, bookorbitPercentage);
 
+    // Mark today as a reading day so streak/dashboard stats reflect KoReader activity
+    const today = new Date().toISOString().slice(0, 10);
+    await this.repo.upsertDailyStat(userId, bookFile.libraryId, today, bookorbitPercentage).catch(() => {});
+
     this.logger.debug(
       `[${SYNC_EVENT}] [end] userId=${userId} bookFileId=${bookFile.id} device=${device} durationMs=${Date.now() - startedAt} percentage=${data.percentage} - save progress completed`,
     );
