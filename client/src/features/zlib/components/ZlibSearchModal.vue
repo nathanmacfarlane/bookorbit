@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
-import { BookOpen, Clock, Loader2, Plus, Search, X } from 'lucide-vue-next'
+import { ref, watch } from 'vue'
+import { BookOpen, Loader2, Plus, Search, X } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { api } from '@/lib/api'
 
@@ -16,14 +16,6 @@ interface ZlibBook {
   cover: string
 }
 
-interface ZlibStatus {
-  connected: boolean
-  downloadsToday: number
-  remainingToday: number
-  isAtLimit: boolean
-  resetsAt: string | null
-}
-
 const emit = defineEmits<{
   close: []
 }>()
@@ -37,22 +29,8 @@ const searchError = ref<string | null>(null)
 const notConnected = ref(false)
 const addingId = ref<string | null>(null)
 const hasSearched = ref(false)
-const status = ref<ZlibStatus | null>(null)
 
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
-
-onMounted(fetchStatus)
-
-async function fetchStatus() {
-  try {
-    const res = await api('/api/v1/zlib/status')
-    if (res.ok) {
-      status.value = await res.json()
-    }
-  } catch {
-    // non-critical
-  }
-}
 
 function formatBytes(bytes: number): string {
   if (!bytes) return ''
@@ -69,15 +47,6 @@ function formatExtClass(ext: string): string {
     fb2: 'bg-teal-500/15 text-teal-600 dark:text-teal-400',
   }
   return map[ext?.toLowerCase()] ?? 'bg-muted text-muted-foreground/85'
-}
-
-function formatResetsIn(resetsAt: string): string {
-  const diff = new Date(resetsAt).getTime() - Date.now()
-  if (diff <= 0) return 'soon'
-  const h = Math.floor(diff / 3_600_000)
-  const m = Math.floor((diff % 3_600_000) / 60_000)
-  if (h > 0) return `${h}h ${m}m`
-  return `${m}m`
 }
 
 async function doSearch() {
@@ -143,19 +112,12 @@ async function addToLibrary(book: ZlibBook) {
       }),
     })
 
-    if (res.status === 429) {
-      toast.error('Daily download limit reached. Try again tomorrow.')
-      await fetchStatus()
-      return
-    }
-
     if (!res.ok) {
       const payload = (await res.json().catch(() => null)) as { message?: string } | null
       toast.error(payload?.message ?? 'Failed to add book')
       return
     }
 
-    await fetchStatus()
     toast.success(`"${book.title}" added to Book Dock`)
   } catch (err) {
     toast.error(err instanceof Error ? err.message : 'Failed to add book')
@@ -193,14 +155,6 @@ function handleKeydown(e: KeyboardEvent) {
           </button>
         </div>
 
-        <!-- Limit banner -->
-        <div v-if="status?.isAtLimit" class="flex items-center gap-2 px-5 py-2.5 bg-amber-500/10 border-b border-amber-500/20 shrink-0">
-          <Clock :size="13" class="text-amber-600 dark:text-amber-400 shrink-0" />
-          <p class="text-xs text-amber-700 dark:text-amber-400">
-            Daily limit reached · resets in {{ status.resetsAt ? formatResetsIn(status.resetsAt) : '24h' }}
-          </p>
-        </div>
-
         <!-- Search bar -->
         <div class="px-5 pt-4 pb-3 border-b border-border/50 shrink-0 space-y-2">
           <div class="flex items-center gap-2">
@@ -233,11 +187,6 @@ function handleKeydown(e: KeyboardEvent) {
             >
               Search
             </button>
-          </div>
-
-          <!-- Download counter -->
-          <div v-if="status?.connected && !status.isAtLimit" class="flex justify-end">
-            <span class="text-xs text-muted-foreground"> {{ status.remainingToday }} of 10 downloads remaining today </span>
           </div>
         </div>
 
@@ -317,7 +266,7 @@ function handleKeydown(e: KeyboardEvent) {
                 <button
                   type="button"
                   class="flex items-center gap-1.5 rounded-md border border-primary/40 bg-primary/5 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/15 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  :disabled="addingId !== null || status?.isAtLimit"
+                  :disabled="addingId !== null"
                   @click="addToLibrary(book)"
                 >
                   <Loader2 v-if="addingId === book.id" :size="12" class="animate-spin" />

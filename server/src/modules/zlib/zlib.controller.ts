@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpException, HttpStatus, Inject, Post, Query, Res, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Inject, Post, Query, Res, UnauthorizedException } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import { Permission } from '@bookorbit/types';
 import { sql } from 'drizzle-orm';
@@ -15,12 +15,9 @@ import { ZlibDownloadDto } from './dto/zlib-download.dto';
 import { ZlibSearchDto } from './dto/zlib-search.dto';
 import { ZlibApiService } from './zlib-api.service';
 import { ZlibCredentialsService } from './zlib-credentials.service';
-import { ZlibLimitReachedException } from './zlib-limit.exception';
 import { BookDockIngestService } from '../book-dock/book-dock-ingest.service';
 
 type Db = NodePgDatabase<typeof schema>;
-
-const DAILY_LIMIT = 10;
 
 @Controller('zlib')
 export class ZlibController {
@@ -113,30 +110,9 @@ export class ZlibController {
     const creds = await this.credentials.findByUserId(user.id);
     if (!creds) throw new UnauthorizedException('Z-Library not connected');
 
-    await this.credentials.resetCountIfExpired(user.id);
-    const fresh = await this.credentials.findByUserId(user.id);
-    if ((fresh?.dailyDownloadCount ?? 0) >= DAILY_LIMIT || fresh?.limitHitAt) {
-      throw new HttpException('Daily download limit reached. Try again tomorrow.', HttpStatus.TOO_MANY_REQUESTS);
-    }
-
-    try {
-      const { stream, filename } = await this.zlibApi.downloadStream(
-        creds.remixUserId,
-        creds.remixUserKey,
-        creds.sessionCookies,
-        dto.bookId,
-        dto.hash,
-      );
-      const resolvedFilename = dto.filename || filename;
-      const bookDockId = await this.bookDockIngest.ingestUpload(resolvedFilename, stream, user.id);
-      await this.credentials.incrementDownloadCount(user.id);
-      return { bookDockId };
-    } catch (err) {
-      if (err instanceof ZlibLimitReachedException) {
-        await this.credentials.markLimitHit(user.id);
-        throw new HttpException('Daily download limit reached. Try again tomorrow.', HttpStatus.TOO_MANY_REQUESTS);
-      }
-      throw err;
-    }
+    const { stream, filename } = await this.zlibApi.downloadStream(creds.remixUserId, creds.remixUserKey, creds.sessionCookies, dto.bookId, dto.hash);
+    const resolvedFilename = dto.filename || filename;
+    const bookDockId = await this.bookDockIngest.ingestUpload(resolvedFilename, stream, user.id);
+    return { bookDockId };
   }
 }
