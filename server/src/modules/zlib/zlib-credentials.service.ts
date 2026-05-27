@@ -60,30 +60,6 @@ export class ZlibCredentialsService implements OnModuleInit {
       await this.db.execute(sql`
         ALTER TABLE "zlib_credentials" ADD COLUMN IF NOT EXISTS "limit_hit_at" timestamp with time zone
       `);
-      await this.db.execute(sql`
-        CREATE TABLE IF NOT EXISTS "zlib_download_queue" (
-          "id" serial PRIMARY KEY NOT NULL,
-          "user_id" integer NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
-          "zlib_book_id" varchar(100) NOT NULL,
-          "hash" varchar(100) NOT NULL,
-          "title" text NOT NULL,
-          "author" text NOT NULL DEFAULT '',
-          "extension" varchar(20) NOT NULL DEFAULT 'epub',
-          "filename" text NOT NULL,
-          "cover" text,
-          "status" varchar(20) NOT NULL DEFAULT 'pending',
-          "error_message" text,
-          "book_dock_id" integer,
-          "created_at" timestamp with time zone DEFAULT now() NOT NULL,
-          "processed_at" timestamp with time zone
-        )
-      `);
-      await this.db.execute(sql`
-        CREATE INDEX IF NOT EXISTS "zlib_download_queue_user_status_idx" ON "zlib_download_queue" ("user_id", "status")
-      `);
-      await this.db.execute(sql`
-        CREATE INDEX IF NOT EXISTS "zlib_download_queue_user_created_idx" ON "zlib_download_queue" ("user_id", "created_at")
-      `);
     } catch (err) {
       this.logger.warn(`zlib_credentials table setup: ${err instanceof Error ? err.message : String(err)}`);
     }

@@ -6,11 +6,10 @@ import {
   HttpCode,
   HttpStatus,
   Inject,
-  Param,
-  ParseIntPipe,
   Post,
   Query,
   Res,
+  TooManyRequestsException,
   UnauthorizedException,
 } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
@@ -27,10 +26,8 @@ import type { RequestUser } from '../../common/types/request-user';
 import { ZlibConnectDto } from './dto/zlib-connect.dto';
 import { ZlibDownloadDto } from './dto/zlib-download.dto';
 import { ZlibSearchDto } from './dto/zlib-search.dto';
-import { ZlibQueueAddDto } from './dto/zlib-queue-add.dto';
 import { ZlibApiService } from './zlib-api.service';
 import { ZlibCredentialsService } from './zlib-credentials.service';
-import { ZlibQueueService } from './zlib-queue.service';
 import { ZlibLimitReachedException } from './zlib-limit.exception';
 import { BookDockIngestService } from '../book-dock/book-dock-ingest.service';
 
@@ -43,7 +40,6 @@ export class ZlibController {
   constructor(
     private readonly zlibApi: ZlibApiService,
     private readonly credentials: ZlibCredentialsService,
-    private readonly queue: ZlibQueueService,
     private readonly bookDockIngest: BookDockIngestService,
     @Inject(DB) private readonly db: Db,
   ) {}
@@ -130,11 +126,10 @@ export class ZlibController {
     const creds = await this.credentials.findByUserId(user.id);
     if (!creds) throw new UnauthorizedException('Z-Library not connected');
 
-    // Check if limit already known to be hit
     await this.credentials.resetCountIfExpired(user.id);
     const fresh = await this.credentials.findByUserId(user.id);
     if ((fresh?.dailyDownloadCount ?? 0) >= DAILY_LIMIT || fresh?.limitHitAt) {
-      return { limitReached: true, resetsAt: fresh?.limitHitAt ? new Date(fresh.limitHitAt.getTime() + 24 * 60 * 60 * 1000).toISOString() : null };
+      throw new TooManyRequestsException('Daily download limit reached. Try again tomorrow.');
     }
 
     try {
@@ -152,52 +147,9 @@ export class ZlibController {
     } catch (err) {
       if (err instanceof ZlibLimitReachedException) {
         await this.credentials.markLimitHit(user.id);
-        const limitHitAt = new Date();
-        return {
-          limitReached: true,
-          resetsAt: new Date(limitHitAt.getTime() + 24 * 60 * 60 * 1000).toISOString(),
-        };
+        throw new TooManyRequestsException('Daily download limit reached. Try again tomorrow.');
       }
       throw err;
     }
-  }
-
-  // -------------------------------------------------------------------------
-  // Queue endpoints
-  // -------------------------------------------------------------------------
-
-  @Get('queue')
-  @RequirePermission(Permission.LibraryUpload)
-  async getQueue(@CurrentUser() user: RequestUser) {
-    return this.queue.getQueue(user.id);
-  }
-
-  @Post('queue')
-  @HttpCode(HttpStatus.CREATED)
-  @RequirePermission(Permission.LibraryUpload)
-  async addToQueue(@Body() dto: ZlibQueueAddDto, @CurrentUser() user: RequestUser) {
-    const item = await this.queue.addToQueue(user.id, dto.bookId, dto.hash, dto.title, dto.author ?? '', dto.format ?? 'epub', dto.cover ?? null);
-    return item;
-  }
-
-  @Delete('queue/:id')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(Permission.LibraryUpload)
-  async removeFromQueue(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: RequestUser) {
-    await this.queue.removeFromQueue(user.id, id);
-  }
-
-  @Post('queue/:id/retry')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(Permission.LibraryUpload)
-  async retryQueueItem(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: RequestUser) {
-    await this.queue.retryFailed(user.id, id);
-  }
-
-  @Post('queue/run')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(Permission.LibraryUpload)
-  runQueue(@CurrentUser() user: RequestUser) {
-    void this.queue.drainForUser(user.id);
   }
 }
