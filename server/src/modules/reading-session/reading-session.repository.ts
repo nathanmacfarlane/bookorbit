@@ -203,6 +203,8 @@ export class ReadingSessionRepository {
         .select({
           id: readingSessions.id,
           startedAt: readingSessions.startedAt,
+          durationSeconds: readingSessions.durationSeconds,
+          progressDelta: readingSessions.progressDelta,
           libraryId: books.libraryId,
         })
         .from(readingSessions)
@@ -213,36 +215,24 @@ export class ReadingSessionRepository {
 
       if (!row) return { found: false };
 
-      const { startedAt, libraryId } = row;
+      const { startedAt, durationSeconds, progressDelta, libraryId } = row;
 
       await tx.delete(readingSessions).where(eq(readingSessions.id, sessionId));
 
       const dayKey = this.formatDayKey(startedAt as Date);
 
+      // Subtract this session's contribution from daily stats rather than deleting and
+      // rebuilding, so that KoReader-sourced reading time (stored directly in
+      // userReadingDailyStats without a reading_sessions row) is preserved.
       await tx
-        .delete(userReadingDailyStats)
+        .update(userReadingDailyStats)
+        .set({
+          readingSeconds: sql`greatest(${userReadingDailyStats.readingSeconds} - ${durationSeconds}, 0)`,
+          progressDelta: sql`greatest(${userReadingDailyStats.progressDelta} - ${progressDelta ?? 0}, 0)`,
+          sessionsCount: sql`greatest(${userReadingDailyStats.sessionsCount} - 1, 0)`,
+          updatedAt: new Date(),
+        })
         .where(and(eq(userReadingDailyStats.userId, userId), eq(userReadingDailyStats.libraryId, libraryId), eq(userReadingDailyStats.day, dayKey)));
-
-      const dayDateSql = sql`${dayKey}::date`;
-
-      await tx.execute(sql`
-        insert into user_reading_daily_stats (user_id, library_id, day, reading_seconds, progress_delta, sessions_count, updated_at)
-        select
-          rs.user_id,
-          b.library_id,
-          date_trunc('day', rs.started_at)::date as day,
-          coalesce(sum(rs.duration_seconds), 0)::int as reading_seconds,
-          coalesce(sum(rs.progress_delta), 0)::real as progress_delta,
-          count(*)::int as sessions_count,
-          now() as updated_at
-        from reading_sessions rs
-        inner join book_files bf on bf.id = rs.book_file_id
-        inner join books b on b.id = bf.book_id
-        where rs.user_id = ${userId}
-          and b.library_id = ${libraryId}
-          and date_trunc('day', rs.started_at)::date in (${dayDateSql})
-        group by rs.user_id, b.library_id, date_trunc('day', rs.started_at)::date
-      `);
 
       return { found: true };
     });

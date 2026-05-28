@@ -84,6 +84,7 @@ export class KoreaderRepository {
       .onConflictDoUpdate({
         target: [schema.userReadingDailyStats.userId, schema.userReadingDailyStats.libraryId, schema.userReadingDailyStats.day],
         set: {
+          readingSeconds: sql`${schema.userReadingDailyStats.readingSeconds} + 60`,
           progressDelta: sql`${schema.userReadingDailyStats.progressDelta} + ${progressDelta}`,
           sessionsCount: sql`${schema.userReadingDailyStats.sessionsCount} + 1`,
           updatedAt: new Date(),
