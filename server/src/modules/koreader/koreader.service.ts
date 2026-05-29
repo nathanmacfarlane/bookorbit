@@ -137,7 +137,11 @@ export class KoreaderService {
 
     // Mark today as a reading day so streak/dashboard stats reflect KoReader activity
     const today = new Date().toISOString().slice(0, 10);
-    await this.repo.upsertDailyStat(userId, bookFile.libraryId, today, bookorbitPercentage).catch(() => {});
+    await this.repo.upsertDailyStat(userId, bookFile.libraryId, today, bookorbitPercentage).catch((err: unknown) => {
+      this.logger.error(
+        `[${SYNC_EVENT}] failed to upsert daily stat userId=${userId} libraryId=${bookFile.libraryId} day=${today} err=${String(err)}`,
+      );
+    });
 
     this.logger.debug(
       `[${SYNC_EVENT}] [end] userId=${userId} bookFileId=${bookFile.id} device=${device} durationMs=${Date.now() - startedAt} percentage=${data.percentage} - save progress completed`,
