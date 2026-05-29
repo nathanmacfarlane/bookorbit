@@ -215,7 +215,7 @@ export const routes: RouteRecordRaw[] = [
           {
             path: 'admin/magic-links',
             name: 'settings-admin-magic-links',
-            redirect: () => ({ name: 'settings-admin', query: { tab: 'users' } }),
+            redirect: () => ({ name: 'settings-admin', query: { tab: 'magic-links' } }),
           },
           { path: ':pathMatch(.*)*', redirect: { name: 'settings-libraries' } },
         ],
@@ -295,6 +295,12 @@ export const routes: RouteRecordRaw[] = [
             name: 'tools-entity-manager',
             component: () => import('@/features/tools/entity-manager/views/EntityManagerView.vue'),
             meta: { title: 'Entity Manager' },
+          },
+          {
+            path: 'bulk-rename',
+            name: 'tools-bulk-rename',
+            component: () => import('@/features/tools/bulk-rename/views/BulkRenameView.vue'),
+            meta: { title: 'Bulk Rename' },
           },
           { path: ':pathMatch(.*)*', redirect: { name: 'tools-entity-manager' } },
         ],

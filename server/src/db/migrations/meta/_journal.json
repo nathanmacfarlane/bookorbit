@@ -66,10 +66,17 @@
       "breakpoints": true
     },
     {
-      "idx": 5,
+      "idx": 9,
       "version": "7",
       "when": 1747612800000,
       "tag": "0005_zlib_credentials_ensure",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1779941161092,
+      "tag": "0008_auth_refresh_rotation_metadata",
       "breakpoints": true
     }
   ]

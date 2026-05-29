@@ -5,6 +5,7 @@ export const appConfig = registerAs('app', () => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   appUrl: process.env.APP_URL ?? 'http://localhost:5173',
   version: process.env.APP_VERSION ?? 'Local build',
+  oidcAllowLocalIssuers: parseBooleanFlag(process.env.OIDC_ALLOW_LOCAL_ISSUERS, false),
 }));
 
 export const dbConfig = registerAs('db', () => ({
@@ -16,6 +17,7 @@ export const authConfig = registerAs('auth', () => ({
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '15m',
   jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '7d',
   setupBootstrapToken: process.env.SETUP_BOOTSTRAP_TOKEN ?? '',
+  refreshRotationGraceMs: parsePositiveInteger(process.env.AUTH_REFRESH_ROTATION_GRACE_MS, 30_000),
 }));
 
 export const storageConfig = registerAs('storage', () => ({
@@ -53,4 +55,12 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
     return fallback;
   }
   return Math.floor(parsed);
+}
+
+function parseBooleanFlag(value: string | undefined, fallback: boolean): boolean {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
 }

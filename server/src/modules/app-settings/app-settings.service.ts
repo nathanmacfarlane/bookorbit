@@ -109,7 +109,7 @@ export class AppSettingsService {
 
   async isCrossPlatformPathSanitizationEnabled(): Promise<boolean> {
     const row = await this.repo.findByKey(APP_SETTING_KEYS.CROSS_PLATFORM_PATH_SANITIZATION_ENABLED);
-    return parseBooleanSetting(row?.value, false);
+    return parseBooleanSetting(row?.value, true);
   }
 
   async setCrossPlatformPathSanitizationEnabled(enabled: boolean): Promise<void> {
@@ -141,7 +141,9 @@ export class AppSettingsService {
       throw new BadRequestException('Issuer URI is not configured');
     }
 
-    const parsedIssuer = await ensureSafeUrl(uri, { allowLocal: this.config.get<string>('app.nodeEnv') !== 'production' });
+    const isProduction = this.config.get<string>('app.nodeEnv') === 'production';
+    const allowPrivateOidcIssuers = !isProduction || this.config.get<boolean>('app.oidcAllowLocalIssuers') === true;
+    const parsedIssuer = await ensureSafeUrl(uri, { allowLocal: allowPrivateOidcIssuers, allowPrivate: allowPrivateOidcIssuers });
     const normalizedIssuer = parsedIssuer.href.replace(/\/$/, '');
     const discoveryUrl = `${normalizedIssuer}/.well-known/openid-configuration`;
 
