@@ -716,7 +716,20 @@ export class UserStatisticsRepository {
     const sinceDay = this.sinceDateForDays(days).toISOString().slice(0, 10);
 
     return this.db.transaction(async (tx) => {
-      const deleteResult = await tx.execute(sql`delete from user_reading_daily_stats where day >= ${sinceDay}::date`);
+      // Only delete rows that have at least one corresponding reading_session so that
+      // KoReader-sourced rows (which have no session rows) are not wiped by the recompute.
+      const deleteResult = await tx.execute(sql`
+        delete from user_reading_daily_stats urds
+        where urds.day >= ${sinceDay}::date
+          and exists (
+            select 1 from reading_sessions rs
+            inner join book_files bf on bf.id = rs.book_file_id
+            inner join books b on b.id = bf.book_id
+            where rs.user_id = urds.user_id
+              and b.library_id = urds.library_id
+              and date_trunc('day', rs.started_at)::date = urds.day
+          )
+      `);
 
       const insertResult = await tx.execute(sql`
         insert into user_reading_daily_stats (user_id, library_id, day, reading_seconds, progress_delta, sessions_count, updated_at)
