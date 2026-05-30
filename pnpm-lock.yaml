@@ -429,6 +429,9 @@ importers:
       "@types/pg":
         specifier: ^8.18.0
         version: 8.20.0
+      "@types/pg-connection-string":
+        specifier: ^2.0.0
+        version: 2.0.0
       "@types/supertest":
         specifier: ^7.2.0
         version: 7.2.0
@@ -5969,6 +5972,13 @@ packages:
       {
         integrity: sha512-aciLyx+wDwT2t2/kJGJR2AEeBz0nJU4WuRX04Wu9Dqc5lSUtwu0WERPHYsLhF9PtseiAMPBGNUOtFjxZ56prsg==,
       }
+
+  "@types/pg-connection-string@2.0.0":
+    resolution:
+      {
+        integrity: sha512-J1ZxH9dN0zSwnJpAlbvRlEtwYD/SYmyLMVF4DF0qfTHv0sH0HEg9WK/B24doWGjgcT8InomL0znJwcYHy3lNUw==,
+      }
+    deprecated: This is a stub types definition for pg-connection-string (https://github.com/iceddev/pg-connection-string). pg-connection-string provides its own type definitions, so you don't need @types/pg-connection-string installed!
 
   "@types/pg@8.20.0":
     resolution:
@@ -18370,6 +18380,10 @@ snapshots:
   "@types/passport@1.0.17":
     dependencies:
       "@types/express": 5.0.6
+
+  "@types/pg-connection-string@2.0.0":
+    dependencies:
+      pg-connection-string: 2.13.0
 
   "@types/pg@8.20.0":
     dependencies:
