@@ -45,3 +45,4 @@ export * from "./reading-session";
 export * from "./annotation";
 export * from "./hardcover";
 export * from "./path";
+export * from "./reading-queue";
