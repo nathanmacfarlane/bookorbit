@@ -27,6 +27,7 @@ export function useReadingQueue() {
   }
 
   async function remove(bookId: number) {
+    error.value = false
     const previous = items.value
     items.value = items.value.filter((i) => i.book.id !== bookId)
     try {
@@ -39,6 +40,7 @@ export function useReadingQueue() {
   }
 
   async function applyReorder(reordered: ReadingQueueItem[]) {
+    error.value = false
     const previous = items.value
     items.value = reordered.map((item, index) => ({ ...item, position: index + 1 }))
     try {

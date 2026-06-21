@@ -54,4 +54,14 @@ describe('useReadingQueue', () => {
     expect(apiMod.removeFromReadingQueue).toHaveBeenCalledWith(1)
     expect(q.items.value.map((i) => i.book.id)).toEqual([2])
   })
+
+  it('remove reverts on error', async () => {
+    mockFetchReadingQueue.mockResolvedValue({ items: [item(1, 1), item(2, 2)] })
+    mockRemoveFromReadingQueue.mockRejectedValue(new Error('nope'))
+    const q = useReadingQueue()
+    await q.load()
+    await q.remove(1)
+    expect(q.items.value.map((i) => i.book.id)).toEqual([1, 2])
+    expect(q.error.value).toBe(true)
+  })
 })
