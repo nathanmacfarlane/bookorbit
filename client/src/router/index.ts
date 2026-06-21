@@ -274,6 +274,12 @@ export const routes: RouteRecordRaw[] = [
         meta: { title: (to) => fallbackById('Collection', numericParam(to, 'id')) },
       },
       {
+        path: '/up-next',
+        name: 'up-next',
+        component: () => import('@/views/UpNextView.vue'),
+        meta: { title: 'Up Next' },
+      },
+      {
         path: '/authors',
         name: 'authors',
         component: () => import('@/features/author/views/AuthorsView.vue'),

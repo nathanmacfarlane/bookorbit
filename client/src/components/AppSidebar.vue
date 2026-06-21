@@ -111,6 +111,7 @@ const {
 const isDashboardActive = computed(() => route.name === 'dashboard')
 const isAuthorsActive = computed(() => route.name === 'authors' || route.name === 'author-detail')
 const isSeriesActive = computed(() => route.name === 'series' || route.name === 'series-detail')
+const isUpNextActive = computed(() => route.name === 'up-next')
 const isToolsActive = computed(() => typeof route.name === 'string' && route.name.startsWith('tools-'))
 
 const activeLibraryId = computed(() => {
@@ -218,6 +219,13 @@ onUnmounted(() => stopLibraryUploadListener())
               :icon="Icons.Library"
               label="Series"
               @click="navigateFromSidebar({ name: 'series' })"
+            />
+            <SidebarNavItem
+              :is-active="isUpNextActive"
+              tooltip="Up Next"
+              :icon="Icons.ListOrdered"
+              label="Up Next"
+              @click="navigateFromSidebar({ name: 'up-next' })"
             />
             <SidebarNavItem
               v-if="hasPermission('manage_libraries')"
