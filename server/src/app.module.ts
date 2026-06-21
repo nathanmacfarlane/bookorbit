@@ -73,6 +73,7 @@ import { AppInfoModule } from './modules/app-info/app-info.module';
 import { ReleaseNotesModule } from './modules/release-notes/release-notes.module';
 import { AchievementModule } from './modules/achievement/achievement.module';
 import { HardcoverModule } from './modules/hardcover/hardcover.module';
+import { ReadingQueueModule } from './modules/reading-queue/reading-queue.module';
 import { ZlibModule } from './modules/zlib/zlib.module';
 
 @Module({
@@ -109,6 +110,7 @@ import { ZlibModule } from './modules/zlib/zlib.module';
     CatalogModule,
     CoverModule,
     CollectionModule,
+    ReadingQueueModule,
     SmartScopeModule,
     ScannerModule,
     MetadataModule,
