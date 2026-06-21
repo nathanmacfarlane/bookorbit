@@ -8,6 +8,7 @@ import {
   Eye,
   Library,
   Headphones,
+  ListPlus,
   Lock,
   MoreHorizontal,
   Pencil,
@@ -34,8 +35,10 @@ import BookCoverArtwork from '@/features/book/components/BookCoverArtwork.vue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { toast } from 'vue-sonner'
 import { api } from '@/lib/api'
 import { usePermissions } from '@/features/auth/composables/usePermissions'
+import { addToReadingQueue } from '@/features/reading-queue/api/reading-queue.api'
 import { useDeleteBook } from '@/features/book/composables/useDeleteBook'
 import { useMetadataLocks } from '@/features/book/composables/useMetadataLocks'
 import DeleteBookDialog from '@/features/book/components/DeleteBookDialog.vue'
@@ -769,6 +772,17 @@ function handleDeleteFromMenu() {
   promptDelete(props.book.id)
 }
 
+async function handleAddToQueue() {
+  moreMenuOpen.value = false
+  mobileMoreMenuOpen.value = false
+  try {
+    await addToReadingQueue(props.book.id)
+    toast.success('Added to Up Next')
+  } catch {
+    toast.error('Could not add to Up Next')
+  }
+}
+
 function handleSendFromMenu() {
   moreMenuOpen.value = false
   mobileMoreMenuOpen.value = false
@@ -1176,6 +1190,13 @@ watch(
         </PopoverTrigger>
         <PopoverContent class="w-44 p-1" align="end">
           <button
+            class="flex w-full items-center gap-2 px-2 py-1.5 rounded text-sm text-foreground hover:bg-muted transition-colors"
+            @click="handleAddToQueue"
+          >
+            <ListPlus class="size-3.5" />
+            Add to Up Next
+          </button>
+          <button
             v-if="hasPermission('email_send')"
             class="flex w-full items-center gap-2 px-2 py-1.5 rounded text-sm text-foreground hover:bg-muted transition-colors"
             @click="handleSendFromMenu"
@@ -1329,7 +1350,14 @@ watch(
                   <MoreHorizontal class="size-3.5" />
                 </button>
               </PopoverTrigger>
-              <PopoverContent class="w-40 p-1" align="end">
+              <PopoverContent class="w-44 p-1" align="end">
+                <button
+                  class="flex w-full items-center gap-2 px-2 py-1.5 rounded text-sm text-foreground hover:bg-muted transition-colors"
+                  @click="handleAddToQueue"
+                >
+                  <ListPlus class="size-3.5" />
+                  Add to Up Next
+                </button>
                 <button
                   v-if="hasPermission('email_send')"
                   class="flex w-full items-center gap-2 px-2 py-1.5 rounded text-sm text-foreground hover:bg-muted transition-colors"

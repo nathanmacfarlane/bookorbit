@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { PackageOpen, CheckCircle2, AlertCircle } from 'lucide-vue-next'
 import type { BookDockFile } from '@bookorbit/types'
+import { toast } from 'vue-sonner'
 import { api } from '@/lib/api'
 import { formatBytes } from '@/lib/formatting'
 import { usePermissions } from '@/features/auth/composables/usePermissions'
@@ -163,6 +164,12 @@ async function handleApplyFetched() {
     }, 4000)
   }
   refresh()
+}
+
+async function handleAddToQueue() {
+  // Book Dock files are pre-library uploads without a library bookId.
+  // Finalize them first to add them to the library before queuing.
+  toast.error('Finalize the selected files first, then add them to Up Next from the book detail page.')
 }
 
 async function handleRetryFetch() {
@@ -433,6 +440,7 @@ onUnmounted(() => {
         @set-destination="openSetDestination"
         @refresh="refresh"
         @apply-fetched="handleApplyFetched"
+        @add-to-queue="handleAddToQueue"
       />
 
       <!-- Statistics bar -->
