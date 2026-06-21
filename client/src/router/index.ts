@@ -6,6 +6,7 @@ import { INTEGRATIONS_TAB_INFO, normalizeIntegrationsTab } from '@/features/sett
 import { ADMIN_TAB_INFO, normalizeAdminTab } from '@/features/settings/lib/admin-tabs'
 import { SYSTEM_TAB_INFO, normalizeSystemTab } from '@/features/settings/lib/system-tabs'
 import { ACCOUNT_TAB_INFO, normalizeAccountTab } from '@/features/settings/lib/account-tabs'
+import { APPEARANCE_TAB_TITLE_LABELS, normalizeAppearanceTab } from '@/features/settings/lib/appearance-tabs'
 import { registerAuthGuard } from './guards/auth.guard'
 import { registerRouteTitleHook } from './title-resolver'
 
@@ -20,7 +21,7 @@ function numericParam(to: RouteLocationNormalizedLoaded, key: string): number | 
   const value = firstText(to.params[key])
   if (!value) return null
   const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : null
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
 }
 
 function fallbackById(prefix: string, id: number | null): string {
@@ -30,6 +31,11 @@ function fallbackById(prefix: string, id: number | null): string {
 function resolveReaderTitle(to: RouteLocationNormalizedLoaded): string {
   const tab = normalizeReaderTab(to.query.tab)
   return READER_TAB_TITLE_LABELS[tab]
+}
+
+function resolveAppearanceTitle(to: RouteLocationNormalizedLoaded): string {
+  const tab = normalizeAppearanceTab(to.query.tab)
+  return APPEARANCE_TAB_TITLE_LABELS[tab]
 }
 
 function resolveEmailTitle(to: RouteLocationNormalizedLoaded): string {
@@ -103,7 +109,7 @@ export const routes: RouteRecordRaw[] = [
             path: 'appearance',
             name: 'settings-appearance',
             component: () => import('@/features/settings/AppearanceSettings.vue'),
-            meta: { title: 'Appearance' },
+            meta: { title: resolveAppearanceTitle },
           },
           {
             path: 'opds',
@@ -227,6 +233,12 @@ export const routes: RouteRecordRaw[] = [
         meta: { title: 'Book Dock' },
       },
       {
+        path: '/whats-new',
+        name: 'whats-new',
+        component: () => import('@/features/whats-new/WhatsNewView.vue'),
+        meta: { title: "What's New" },
+      },
+      {
         path: '/statistics',
         name: 'statistics',
         component: () => import('@/features/statistics/components/StatisticsPage.vue'),
@@ -280,10 +292,10 @@ export const routes: RouteRecordRaw[] = [
         meta: { title: 'Series' },
       },
       {
-        path: '/series/:seriesName',
+        path: '/series/:seriesId',
         name: 'series-detail',
         component: () => import('@/features/series/views/SeriesDetailView.vue'),
-        meta: { title: (to) => `Series · ${firstText(to.params.seriesName) ?? 'Series'}` },
+        meta: { title: (to) => fallbackById('Series', numericParam(to, 'seriesId')) },
       },
       {
         path: '/tools',

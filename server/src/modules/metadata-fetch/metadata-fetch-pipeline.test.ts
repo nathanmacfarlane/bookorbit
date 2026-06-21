@@ -6,11 +6,13 @@ import {
   MetadataFetchPreferences,
   MetadataField,
   MetadataProviderKey,
+  ProviderConfigurations,
 } from '@bookorbit/types';
 import { of } from 'rxjs';
 
 import { MetadataPreferenceResolver } from '../metadata-preferences/metadata-preference-resolver';
 import { MetadataPreferencesService } from '../metadata-preferences/metadata-preferences.service';
+import { ProviderConfigService } from '../metadata-preferences/provider-config.service';
 import { MetadataFetchPipeline } from './metadata-fetch-pipeline';
 import { MetadataFetchService } from './metadata-fetch.service';
 import { ProviderRegistry } from './provider-registry';
@@ -44,8 +46,10 @@ function candidate(provider: MetadataProviderKey, providerId: string, data: Part
 describe('MetadataFetchPipeline', () => {
   let fetchService: Mocked<MetadataFetchService>;
   let preferencesService: Mocked<MetadataPreferencesService>;
+  let providerConfig: Mocked<ProviderConfigService>;
   let resolver: Mocked<MetadataPreferenceResolver>;
   let registry: Mocked<ProviderRegistry>;
+  let throttleTracker: Mocked<Pick<ProviderThrottleTracker, 'isThrottled'>>;
   let pipeline: MetadataFetchPipeline;
 
   beforeEach(() => {
@@ -58,6 +62,10 @@ describe('MetadataFetchPipeline', () => {
       getForLibrary: vi.fn(),
     } as unknown as Mocked<MetadataPreferencesService>;
 
+    providerConfig = {
+      getConfig: vi.fn().mockResolvedValue(makeProviderConfig()),
+    } as unknown as Mocked<ProviderConfigService>;
+
     resolver = {
       resolve: vi.fn(),
       withForwardCompatibility: vi.fn(),
@@ -67,8 +75,15 @@ describe('MetadataFetchPipeline', () => {
       all: vi.fn(),
     } as unknown as Mocked<ProviderRegistry>;
 
-    const throttleTracker = { isThrottled: vi.fn().mockReturnValue(false) } as unknown as ProviderThrottleTracker;
-    pipeline = new MetadataFetchPipeline(fetchService, preferencesService, resolver, registry, throttleTracker);
+    throttleTracker = { isThrottled: vi.fn().mockReturnValue(false) };
+    pipeline = new MetadataFetchPipeline(
+      fetchService,
+      preferencesService,
+      resolver,
+      registry,
+      throttleTracker as ProviderThrottleTracker,
+      providerConfig,
+    );
   });
 
   it('derives enabled provider keys from active fields, filters unknown providers, and de-duplicates keys', async () => {
@@ -99,6 +114,140 @@ describe('MetadataFetchPipeline', () => {
     await pipeline.run({ title: 'Query' }, {});
 
     expect(fetchService.search).toHaveBeenCalledWith({ title: 'Query' }, [MetadataProviderKey.GOOGLE, MetadataProviderKey.OPEN_LIBRARY]);
+  });
+
+  it('filters derived provider keys by enabled provider config', async () => {
+    const global = createPreferences((fields) => {
+      fields.title = {
+        enabled: true,
+        providers: [MetadataProviderKey.GOOGLE, MetadataProviderKey.OPEN_LIBRARY, MetadataProviderKey.KOBO],
+        mergeStrategy: 'overwriteIfProvided',
+      };
+    });
+
+    providerConfig.getConfig.mockResolvedValue(
+      makeProviderConfig({
+        google: { enabled: false, apiKey: '' },
+        openLibrary: { enabled: false },
+        kobo: { enabled: true, country: 'us', language: 'en' },
+        lubimyczytac: { enabled: false },
+      }),
+    );
+    preferencesService.getGlobal.mockResolvedValue(global);
+    resolver.resolve.mockReturnValue(global);
+    resolver.withForwardCompatibility.mockReturnValue(global);
+    registry.all.mockReturnValue([
+      { key: MetadataProviderKey.GOOGLE },
+      { key: MetadataProviderKey.OPEN_LIBRARY },
+      { key: MetadataProviderKey.KOBO },
+    ] as never);
+    fetchService.search.mockReturnValue(of(candidate(MetadataProviderKey.KOBO, 'k1', { title: 'Kobo Title' })));
+
+    await pipeline.run({ title: 'Query' }, {});
+
+    expect(fetchService.search).toHaveBeenCalledWith({ title: 'Query' }, [MetadataProviderKey.KOBO]);
+  });
+
+  it('returns diagnostics when field rules only reference disabled providers', async () => {
+    const global = createPreferences();
+
+    providerConfig.getConfig.mockResolvedValue(
+      makeProviderConfig({
+        google: { enabled: false, apiKey: '' },
+        openLibrary: { enabled: false },
+      }),
+    );
+    preferencesService.getGlobal.mockResolvedValue(global);
+    resolver.resolve.mockReturnValue(global);
+    resolver.withForwardCompatibility.mockReturnValue(global);
+    registry.all.mockReturnValue([
+      { key: MetadataProviderKey.GOOGLE },
+      { key: MetadataProviderKey.OPEN_LIBRARY },
+      { key: MetadataProviderKey.KOBO },
+    ] as never);
+
+    const { resolved, diagnostics } = await pipeline.runWithSources({ title: 'Query' }, {});
+
+    expect(resolved).toEqual({});
+    expect(fetchService.search).not.toHaveBeenCalled();
+    expect(diagnostics).toMatchObject({
+      reason: 'no_active_providers',
+      activeProviders: [],
+      fieldRuleProviders: [MetadataProviderKey.GOOGLE, MetadataProviderKey.OPEN_LIBRARY],
+      disabledFieldRuleProviders: [MetadataProviderKey.GOOGLE, MetadataProviderKey.OPEN_LIBRARY],
+      enabledUnreferencedProviders: [MetadataProviderKey.KOBO],
+      throttledProviders: [],
+      candidateProviders: [],
+      candidateCount: 0,
+      resolvedFieldCount: 0,
+    });
+  });
+
+  it('returns diagnostics when selected providers are throttled', async () => {
+    const global = createPreferences((fields) => {
+      fields.title = {
+        enabled: true,
+        providers: [MetadataProviderKey.GOOGLE],
+        mergeStrategy: 'overwriteIfProvided',
+      };
+    });
+
+    preferencesService.getGlobal.mockResolvedValue(global);
+    resolver.resolve.mockReturnValue(global);
+    resolver.withForwardCompatibility.mockReturnValue(global);
+    registry.all.mockReturnValue([{ key: MetadataProviderKey.GOOGLE }] as never);
+    throttleTracker.isThrottled.mockReturnValue(true);
+
+    const { diagnostics } = await pipeline.runWithSources({ title: 'Query' }, {});
+
+    expect(fetchService.search).not.toHaveBeenCalled();
+    expect(diagnostics.reason).toBe('providers_throttled');
+    expect(diagnostics.throttledProviders).toEqual([MetadataProviderKey.GOOGLE]);
+  });
+
+  it('returns diagnostics when active providers return no candidates', async () => {
+    const global = createPreferences((fields) => {
+      fields.title = {
+        enabled: true,
+        providers: [MetadataProviderKey.GOOGLE],
+        mergeStrategy: 'overwriteIfProvided',
+      };
+    });
+
+    preferencesService.getGlobal.mockResolvedValue(global);
+    resolver.resolve.mockReturnValue(global);
+    resolver.withForwardCompatibility.mockReturnValue(global);
+    registry.all.mockReturnValue([{ key: MetadataProviderKey.GOOGLE }] as never);
+    fetchService.search.mockReturnValue(of() as never);
+
+    const { diagnostics } = await pipeline.runWithSources({ title: 'Query' }, {});
+
+    expect(diagnostics.reason).toBe('no_candidates');
+    expect(diagnostics.activeProviders).toEqual([MetadataProviderKey.GOOGLE]);
+    expect(diagnostics.candidateCount).toBe(0);
+  });
+
+  it('returns diagnostics when candidates do not resolve any fields', async () => {
+    const global = createPreferences((fields) => {
+      fields.title = {
+        enabled: true,
+        providers: [MetadataProviderKey.GOOGLE],
+        mergeStrategy: 'fillMissing',
+      };
+    });
+
+    preferencesService.getGlobal.mockResolvedValue(global);
+    resolver.resolve.mockReturnValue(global);
+    resolver.withForwardCompatibility.mockReturnValue(global);
+    registry.all.mockReturnValue([{ key: MetadataProviderKey.GOOGLE }] as never);
+    fetchService.search.mockReturnValue(of(candidate(MetadataProviderKey.GOOGLE, 'g1', { title: 'Fetched Title' })));
+
+    const { resolved, diagnostics } = await pipeline.runWithSources({ title: 'Query' }, { title: 'Existing Title' });
+
+    expect(resolved).toEqual({});
+    expect(diagnostics.reason).toBe('no_resolved_fields');
+    expect(diagnostics.candidateProviders).toEqual([MetadataProviderKey.GOOGLE]);
+    expect(diagnostics.candidateCount).toBe(1);
   });
 
   it('applies fillMissing without overwriting existing fields and records sources', async () => {
@@ -231,7 +380,7 @@ describe('MetadataFetchPipeline', () => {
       };
     });
     prefs.options = {
-      genres: { mode: 'merge' },
+      genres: { mode: 'merge', blocklist: [] },
       saveProviderIds: false,
     };
 
@@ -252,6 +401,66 @@ describe('MetadataFetchPipeline', () => {
     expect(sources.genres).toBe(MetadataProviderKey.GOOGLE);
   });
 
+  it('filters blocklisted genres before merging selected providers', async () => {
+    const prefs = createPreferences((fields) => {
+      fields.genres = {
+        enabled: true,
+        providers: [MetadataProviderKey.GOOGLE, MetadataProviderKey.OPEN_LIBRARY],
+        mergeStrategy: 'overwriteIfProvided',
+      };
+    });
+    prefs.options = {
+      genres: { mode: 'merge', blocklist: ['audiobook', ' Adult '] },
+      saveProviderIds: false,
+    };
+
+    preferencesService.getGlobal.mockResolvedValue(prefs);
+    resolver.resolve.mockReturnValue(prefs);
+    resolver.withForwardCompatibility.mockReturnValue(prefs);
+    registry.all.mockReturnValue([{ key: MetadataProviderKey.GOOGLE }, { key: MetadataProviderKey.OPEN_LIBRARY }] as never);
+    fetchService.search.mockReturnValue(
+      of(
+        candidate(MetadataProviderKey.GOOGLE, 'g1', { genres: ['Sci-Fi', 'Audiobook', 'Adult'] }),
+        candidate(MetadataProviderKey.OPEN_LIBRARY, 'ol1', { genres: ['audiobook', 'Fantasy'] }),
+      ),
+    );
+
+    const { resolved, sources } = await pipeline.runWithSources({ title: 'Query' }, {});
+
+    expect(resolved.genres).toEqual(['Sci-Fi', 'Fantasy']);
+    expect(sources.genres).toBe(MetadataProviderKey.GOOGLE);
+  });
+
+  it('filters blocklisted genres and falls back in first-provider mode when a provider has no remaining genres', async () => {
+    const prefs = createPreferences((fields) => {
+      fields.genres = {
+        enabled: true,
+        providers: [MetadataProviderKey.GOOGLE, MetadataProviderKey.OPEN_LIBRARY],
+        mergeStrategy: 'overwriteIfProvided',
+      };
+    });
+    prefs.options = {
+      genres: { mode: 'firstProvider', blocklist: ['Audiobook'] },
+      saveProviderIds: false,
+    };
+
+    preferencesService.getGlobal.mockResolvedValue(prefs);
+    resolver.resolve.mockReturnValue(prefs);
+    resolver.withForwardCompatibility.mockReturnValue(prefs);
+    registry.all.mockReturnValue([{ key: MetadataProviderKey.GOOGLE }, { key: MetadataProviderKey.OPEN_LIBRARY }] as never);
+    fetchService.search.mockReturnValue(
+      of(
+        candidate(MetadataProviderKey.GOOGLE, 'g1', { genres: ['audiobook'] }),
+        candidate(MetadataProviderKey.OPEN_LIBRARY, 'ol1', { genres: ['Fantasy', 'Adventure'] }),
+      ),
+    );
+
+    const { resolved, sources } = await pipeline.runWithSources({ title: 'Query' }, {});
+
+    expect(resolved.genres).toEqual(['Fantasy', 'Adventure']);
+    expect(sources.genres).toBe(MetadataProviderKey.OPEN_LIBRARY);
+  });
+
   it('returns provider ids for matched providers when saveProviderIds is enabled', async () => {
     const prefs = createPreferences((fields) => {
       fields.title = {
@@ -261,7 +470,7 @@ describe('MetadataFetchPipeline', () => {
       };
     });
     prefs.options = {
-      genres: { mode: 'firstProvider' },
+      genres: { mode: 'firstProvider', blocklist: [] },
       saveProviderIds: true,
     };
 
@@ -286,7 +495,7 @@ describe('MetadataFetchPipeline', () => {
       };
     });
     prefs.options = {
-      genres: { mode: 'firstProvider' },
+      genres: { mode: 'firstProvider', blocklist: [] },
       saveProviderIds: false,
     };
 
@@ -353,3 +562,20 @@ describe('MetadataFetchPipeline', () => {
     expect(result.title).toBe('Library Title');
   });
 });
+
+function makeProviderConfig(overrides: Partial<ProviderConfigurations> = {}): ProviderConfigurations {
+  return {
+    google: { enabled: true, apiKey: '', ...overrides.google },
+    amazon: { enabled: true, domain: 'amazon.com', cookie: '', ...overrides.amazon },
+    goodreads: { enabled: true, ...overrides.goodreads },
+    hardcover: { enabled: true, apiKey: 'hardcover-key', ...overrides.hardcover },
+    openLibrary: { enabled: true, ...overrides.openLibrary },
+    itunes: { enabled: true, coverResolution: 'high', ...overrides.itunes },
+    audible: { enabled: true, domain: 'com', ...overrides.audible },
+    audnexus: { enabled: true, ...overrides.audnexus },
+    comicvine: { enabled: true, apiKey: 'comicvine-key', ...overrides.comicvine },
+    ranobedb: { enabled: true, ...overrides.ranobedb },
+    kobo: { enabled: true, country: 'us', language: 'en', ...overrides.kobo },
+    lubimyczytac: { enabled: false, ...overrides.lubimyczytac },
+  };
+}

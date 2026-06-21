@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { defineComponent, nextTick, reactive, ref, type PropType } from 'vue'
-import { mount } from '@vue/test-utils'
-import type { BookCard, SeriesDetail } from '@bookorbit/types'
+import { computed, defineComponent, nextTick, reactive, ref, type PropType } from 'vue'
+import { flushPromises, mount } from '@vue/test-utils'
+import type { BookCard, SeriesBooksPage, SeriesDetail } from '@bookorbit/types'
 import SeriesDetailView from './SeriesDetailView.vue'
 
-type ViewMode = 'grid' | 'list' | 'table'
+const GROUP_BY_MEDIA_STORAGE_KEY = 'bookorbit:series-detail:group-by-media'
 
 class MockIntersectionObserver {
   observe = vi.fn<(target: Element) => void>()
@@ -14,7 +14,7 @@ class MockIntersectionObserver {
 }
 
 const mocks = vi.hoisted(() => ({
-  route: null as unknown as { params: { seriesName: string }; query: Record<string, unknown> },
+  route: null as unknown as { params: { seriesId: string }; query: Record<string, unknown> },
   routerPush: vi.fn<(to: unknown) => Promise<void>>(),
   fetchLibraries: vi.fn<() => Promise<void>>(),
   setBookContext: vi.fn<(ids: number[], total: number) => void>(),
@@ -29,7 +29,6 @@ const mocks = vi.hoisted(() => ({
   sort: null as unknown as { value: 'seriesIndex' | 'title' | 'addedAt' },
   order: null as unknown as { value: 'asc' | 'desc' },
   libraryId: null as unknown as { value: number | null },
-  effectiveViewMode: null as unknown as { value: ViewMode },
   fetchSeriesBooks: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   api: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
 }))
@@ -59,12 +58,9 @@ vi.mock('@/composables/useDisplaySettings', () => ({
   useDisplaySettings: () => ({
     portraitCoverSize: ref(160),
     gridGap: ref(16),
-  }),
-}))
-
-vi.mock('@/composables/useEffectiveViewMode', () => ({
-  useEffectiveViewMode: () => ({
-    effectiveViewMode: mocks.effectiveViewMode,
+    bookCoverDisplayMode: ref('blurred-fit'),
+    gridCardPrimaryLabel: ref('hidden'),
+    gridCardSecondaryLabel: ref('hidden'),
   }),
 }))
 
@@ -113,6 +109,7 @@ function makeBook(overrides: Partial<BookCard> = {}): BookCard {
     status: 'present',
     title: 'Series Book',
     authors: ['Author'],
+    seriesId: 42,
     seriesName: 'The Series',
     seriesIndex: 1,
     files: [],
@@ -140,6 +137,7 @@ function makeBook(overrides: Partial<BookCard> = {}): BookCard {
 
 function makeSeriesInfo(): SeriesDetail {
   return {
+    id: 42,
     name: 'The Series',
     bookCount: 1,
     readCount: 0,
@@ -150,31 +148,43 @@ function makeSeriesInfo(): SeriesDetail {
 
 const VirtualBookGridStub = defineComponent({
   name: 'VirtualBookGrid',
+  props: {
+    books: {
+      type: Array as PropType<BookCard[]>,
+      required: true,
+    },
+  },
   emits: ['action', 'update:book'],
+  setup(props) {
+    const bookIds = computed(() => props.books.map((book) => book.id).join(','))
+    return { bookIds }
+  },
   template: `
-    <div>
-      <button data-testid="grid-add-action" @click="$emit('action', { id: 42 }, 'add-to-collection')">add</button>
-      <button data-testid="grid-quick-action" @click="$emit('action', { id: 42 }, 'quick-view')">quick</button>
+    <div data-testid="virtual-book-grid" :data-book-ids="bookIds">
+      <button v-for="book in books" :key="'add-' + book.id" :data-testid="'grid-add-action-' + book.id" @click="$emit('action', book, 'add-to-collection')">
+        add
+      </button>
+      <button v-for="book in books" :key="'quick-' + book.id" :data-testid="'grid-quick-action-' + book.id" @click="$emit('action', book, 'quick-view')">
+        quick
+      </button>
     </div>
   `,
 })
 
-const BookListRowStub = defineComponent({
-  name: 'BookListRow',
+const BookCoverArtworkStub = defineComponent({
+  name: 'BookCoverArtwork',
   props: {
-    book: {
-      type: Object as PropType<BookCard>,
-      required: true,
+    mode: {
+      type: String,
+      default: undefined,
+    },
+    frameAspectRatio: {
+      type: String,
+      default: undefined,
     },
   },
-  emits: ['action'],
-  template: `<button data-testid="list-add-action" @click="$emit('action', 'add-to-collection')">{{ book.id }}</button>`,
-})
-
-const VirtualBookTableStub = defineComponent({
-  name: 'VirtualBookTable',
-  emits: ['action', 'update:sort', 'update:book'],
-  template: `<button data-testid="table-add-action" @click="$emit('action', { id: 91 }, 'add-to-collection')">add</button>`,
+  emits: ['load', 'error'],
+  template: '<div data-testid="lead-cover-artwork" :data-mode="mode ?? \'\'" :data-frame-aspect-ratio="frameAspectRatio ?? \'\'" />',
 })
 
 const AddToCollectionSheetStub = defineComponent({
@@ -197,16 +207,34 @@ const AddToCollectionSheetStub = defineComponent({
   `,
 })
 
-function mountView(mode: ViewMode) {
-  mocks.effectiveViewMode.value = mode
+const BookQuickViewStub = defineComponent({
+  name: 'BookQuickView',
+  props: {
+    bookId: {
+      type: Number,
+      default: null,
+    },
+    open: {
+      type: Boolean,
+      required: true,
+    },
+  },
+  emits: ['update:open', 'action'],
+  template: `
+    <div data-testid="quick-view" :data-open="open ? 'true' : 'false'" :data-book-id="bookId ?? ''">
+      <button data-testid="quick-view-action-add" @click="$emit('action', 'add-to-collection')">add</button>
+    </div>
+  `,
+})
 
+function mountView() {
   return mount(SeriesDetailView, {
     global: {
       stubs: {
         VirtualBookGrid: VirtualBookGridStub,
-        BookListRow: BookListRowStub,
-        VirtualBookTable: VirtualBookTableStub,
         AddToCollectionSheet: AddToCollectionSheetStub,
+        BookCoverArtwork: BookCoverArtworkStub,
+        BookQuickView: BookQuickViewStub,
         EntityNotFound: true,
         SeriesCompletionBar: true,
         SeriesGapBanner: true,
@@ -217,8 +245,10 @@ function mountView(mode: ViewMode) {
 
 describe('SeriesDetailView', () => {
   beforeEach(() => {
+    localStorage.clear()
+
     mocks.route = reactive({
-      params: { seriesName: 'The%20Series' },
+      params: { seriesId: '42' },
       query: {},
     })
 
@@ -232,7 +262,6 @@ describe('SeriesDetailView', () => {
     mocks.sort = ref('seriesIndex')
     mocks.order = ref('asc')
     mocks.libraryId = ref<number | null>(null)
-    mocks.effectiveViewMode = ref('grid')
 
     mocks.routerPush.mockReset()
     mocks.routerPush.mockResolvedValue(undefined)
@@ -259,50 +288,191 @@ describe('SeriesDetailView', () => {
     vi.unstubAllGlobals()
   })
 
+  it('renders book grids without depending on global view mode', async () => {
+    const wrapper = mountView()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="virtual-book-grid"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="virtual-book-grid"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="series-books-section-heading"]').text()).toBe('Books')
+  })
+
+  it('shows grouped media sections with labels and counts when enabled', async () => {
+    localStorage.setItem(GROUP_BY_MEDIA_STORAGE_KEY, 'true')
+    mocks.items = ref([
+      makeBook({ id: 7, files: [{ id: 1, format: 'epub', role: 'primary', sizeBytes: null }] }),
+      makeBook({ id: 8, files: [{ id: 2, format: 'pdf', role: 'primary', sizeBytes: null }] }),
+      makeBook({ id: 9, files: [{ id: 3, format: 'm4b', role: 'primary', sizeBytes: null }] }),
+      makeBook({ id: 10, files: [{ id: 4, format: 'cbz', role: 'primary', sizeBytes: null }] }),
+    ])
+    mocks.total = ref(4)
+    mocks.seriesInfo = ref({ ...makeSeriesInfo(), bookCount: 4 })
+
+    const wrapper = mountView()
+    await nextTick()
+
+    const booksGroup = wrapper.get('[data-testid="series-media-group-books"]')
+    const audiobooksGroup = wrapper.get('[data-testid="series-media-group-audiobooks"]')
+    const comicsGroup = wrapper.get('[data-testid="series-media-group-comics"]')
+
+    expect(wrapper.find('[data-testid="series-books-section-heading"]').exists()).toBe(false)
+    expect(booksGroup.text()).toContain('Books')
+    expect(booksGroup.text()).toContain('2')
+    expect(booksGroup.get('[data-testid="virtual-book-grid"]').attributes('data-book-ids')).toBe('7,8')
+    expect(audiobooksGroup.text()).toContain('Audiobooks')
+    expect(audiobooksGroup.text()).toContain('1')
+    expect(audiobooksGroup.get('[data-testid="virtual-book-grid"]').attributes('data-book-ids')).toBe('9')
+    expect(comicsGroup.text()).toContain('Comics')
+    expect(comicsGroup.text()).toContain('1')
+    expect(comicsGroup.get('[data-testid="virtual-book-grid"]').attributes('data-book-ids')).toBe('10')
+  })
+
+  it('switches between grouped and plain grid rendering', async () => {
+    mocks.items = ref([
+      makeBook({ id: 7, files: [{ id: 1, format: 'epub', role: 'primary', sizeBytes: null }] }),
+      makeBook({ id: 8, files: [{ id: 2, format: 'm4b', role: 'primary', sizeBytes: null }] }),
+      makeBook({ id: 9, files: [{ id: 3, format: 'cbz', role: 'primary', sizeBytes: null }] }),
+    ])
+    mocks.total = ref(3)
+    mocks.seriesInfo = ref({ ...makeSeriesInfo(), bookCount: 3 })
+
+    const wrapper = mountView()
+    await nextTick()
+
+    expect(wrapper.findAll('[data-testid="virtual-book-grid"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="series-books-section-heading"]').text()).toBe('Books')
+
+    await wrapper.get('[data-testid="series-group-by-media-toggle"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="series-books-section-heading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="series-media-group-books"]').exists()).toBe(true)
+    const grids = wrapper.findAll('[data-testid="virtual-book-grid"]')
+    expect(grids).toHaveLength(3)
+    expect(grids.map((grid) => grid.attributes('data-book-ids'))).toEqual(['7', '8', '9'])
+    expect(localStorage.getItem(GROUP_BY_MEDIA_STORAGE_KEY)).toBe('true')
+  })
+
+  it('loads the stored group by media preference', async () => {
+    localStorage.setItem(GROUP_BY_MEDIA_STORAGE_KEY, 'true')
+    mocks.items = ref([
+      makeBook({ id: 7, files: [{ id: 1, format: 'epub', role: 'primary', sizeBytes: null }] }),
+      makeBook({ id: 8, files: [{ id: 2, format: 'm4b', role: 'primary', sizeBytes: null }] }),
+    ])
+    mocks.total = ref(2)
+    mocks.seriesInfo = ref({ ...makeSeriesInfo(), bookCount: 2 })
+
+    const wrapper = mountView()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="series-books-section-heading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="series-media-group-books"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="series-media-group-audiobooks"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="virtual-book-grid"]')).toHaveLength(2)
+  })
+
   it('opens AddToCollectionSheet with the clicked book id from grid actions', async () => {
-    const wrapper = mountView('grid')
+    mocks.items = ref([
+      makeBook({ id: 7, files: [{ id: 1, format: 'epub', role: 'primary', sizeBytes: null }] }),
+      makeBook({ id: 8, files: [{ id: 2, format: 'm4b', role: 'primary', sizeBytes: null }] }),
+    ])
+    mocks.total = ref(2)
+    mocks.seriesInfo = ref({ ...makeSeriesInfo(), bookCount: 2 })
+
+    const wrapper = mountView()
     await nextTick()
 
-    await wrapper.get('[data-testid="grid-add-action"]').trigger('click')
+    await wrapper.get('[data-testid="grid-add-action-8"]').trigger('click')
 
     const sheet = wrapper.get('[data-testid="collection-sheet"]')
     expect(sheet.attributes('data-open')).toBe('true')
-    expect(sheet.attributes('data-book-ids')).toBe('42')
+    expect(sheet.attributes('data-book-ids')).toBe('8')
   })
 
-  it('opens AddToCollectionSheet with the clicked book id from table actions', async () => {
-    const wrapper = mountView('table')
+  it('opens quick-view and closes the collection sheet state', async () => {
+    const wrapper = mountView()
     await nextTick()
 
-    await wrapper.get('[data-testid="table-add-action"]').trigger('click')
+    await wrapper.get('[data-testid="grid-add-action-7"]').trigger('click')
+    await wrapper.get('[data-testid="grid-quick-action-7"]').trigger('click')
 
-    const sheet = wrapper.get('[data-testid="collection-sheet"]')
-    expect(sheet.attributes('data-open')).toBe('true')
-    expect(sheet.attributes('data-book-ids')).toBe('91')
-  })
-
-  it('navigates on quick-view and closes the collection sheet state', async () => {
-    const wrapper = mountView('grid')
-    await nextTick()
-
-    await wrapper.get('[data-testid="grid-add-action"]').trigger('click')
-    await wrapper.get('[data-testid="grid-quick-action"]').trigger('click')
-
-    expect(mocks.routerPush).toHaveBeenCalledWith({ name: 'book-detail', params: { bookId: 42 } })
+    const quickView = wrapper.get('[data-testid="quick-view"]')
+    expect(quickView.attributes('data-open')).toBe('true')
+    expect(quickView.attributes('data-book-id')).toBe('7')
     const sheet = wrapper.get('[data-testid="collection-sheet"]')
     expect(sheet.attributes('data-open')).toBe('false')
     expect(sheet.attributes('data-book-ids')).toBe('')
   })
 
   it('clears selected ids when the collection sheet closes', async () => {
-    const wrapper = mountView('grid')
+    const wrapper = mountView()
     await nextTick()
 
-    await wrapper.get('[data-testid="grid-add-action"]').trigger('click')
+    await wrapper.get('[data-testid="grid-add-action-7"]').trigger('click')
     await wrapper.get('[data-testid="collection-sheet-close"]').trigger('click')
 
     const sheet = wrapper.get('[data-testid="collection-sheet"]')
     expect(sheet.attributes('data-open')).toBe('false')
     expect(sheet.attributes('data-book-ids')).toBe('')
+  })
+
+  it('scales and centers square lead covers in the series header stack', async () => {
+    const lead = makeBook({ id: 7, seriesIndex: 1, hasCover: true })
+    mocks.fetchSeriesBooks.mockResolvedValueOnce({
+      items: [lead],
+      total: 1,
+      page: 0,
+      size: 8,
+      seriesInfo: makeSeriesInfo(),
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const artwork = wrapper.getComponent(BookCoverArtworkStub)
+    artwork.vm.$emit('load', 1)
+    await nextTick()
+
+    const style = wrapper.get('[data-testid="lead-cover-artwork"]').element.parentElement?.getAttribute('style') ?? ''
+    expect(style).toContain('scale(1.25)')
+    expect(style).toContain('transform-origin: center bottom')
+    expect(style).toContain('translateY(-12.5%)')
+    expect(style).toContain('aspect-ratio: 1 / 1')
+    expect(wrapper.get('[data-testid="lead-cover-artwork"]').attributes('data-mode')).toBe('natural-bottom')
+    expect(wrapper.get('[data-testid="lead-cover-artwork"]').attributes('data-frame-aspect-ratio')).toBe('1/1')
+
+    artwork.vm.$emit('load', 1)
+    await nextTick()
+    const secondStyle = wrapper.get('[data-testid="lead-cover-artwork"]').element.parentElement?.getAttribute('style') ?? ''
+    expect(secondStyle).toBe(style)
+  })
+
+  it('ignores stale lead preview responses after route id becomes invalid', async () => {
+    let resolveLeadPreview!: (value: SeriesBooksPage) => void
+    mocks.fetchSeriesBooks.mockImplementationOnce(
+      () =>
+        new Promise<SeriesBooksPage>((resolve) => {
+          resolveLeadPreview = resolve
+        }),
+    )
+
+    const wrapper = mountView()
+    await nextTick()
+
+    mocks.route.params.seriesId = 'invalid'
+    await nextTick()
+
+    resolveLeadPreview({
+      items: [makeBook({ id: 7, seriesIndex: 1, hasCover: true })],
+      total: 1,
+      page: 0,
+      size: 8,
+      seriesInfo: makeSeriesInfo(),
+    })
+    await flushPromises()
+
+    expect(mocks.api).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="lead-cover-artwork"]').exists()).toBe(false)
   })
 })

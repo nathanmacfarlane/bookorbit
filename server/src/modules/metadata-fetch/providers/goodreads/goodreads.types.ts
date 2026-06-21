@@ -6,8 +6,25 @@ export interface GoodreadsNextData {
   };
 }
 
+// Returned by the public /book/auto_complete JSON endpoint. Unlike the detail
+// page, this endpoint is not gated behind the AWS WAF challenge, so it is the
+// fallback source when the detail-page scrape is blocked.
+export interface GoodreadsAutocompleteItem {
+  bookId?: string | number;
+  workId?: string | number;
+  bookUrl?: string;
+  title?: string;
+  bookTitleBare?: string;
+  author?: string | { name?: string };
+  numPages?: string | number;
+  ratingsCount?: string | number;
+  imageUrl?: string;
+  description?: { html?: string; truncated?: boolean } | string;
+}
+
 // Inline nested objects — NOT __ref pointers
 export interface GoodreadsApolloBook {
+  legacyId?: string | number;
   title?: string;
   description?: string;
   imageUrl?: string;

@@ -17,7 +17,11 @@ export interface StoredProviderIdsRow {
   openLibraryId: string | null;
   itunesId: string | null;
   audibleId: string | null;
+  koboId: string | null;
   comicvineId: string | null;
+  ranobedbId: string | null;
+  lubimyczytacId: string | null;
+  aladinId: string | null;
 }
 
 @Injectable()
@@ -35,7 +39,11 @@ export class MetadataFetchRepository {
         openLibraryId: bookMetadata.openLibraryId,
         itunesId: bookMetadata.itunesId,
         audibleId: bookMetadata.audibleId,
+        koboId: bookMetadata.koboId,
         comicvineId: bookMetadata.comicvineId,
+        ranobedbId: bookMetadata.ranobedbId,
+        lubimyczytacId: bookMetadata.lubimyczytacId,
+        aladinId: bookMetadata.aladinId,
       })
       .from(books)
       .leftJoin(bookMetadata, eq(bookMetadata.bookId, books.id))

@@ -6,6 +6,8 @@ import { bookFiles, books } from './books';
 import { libraries } from './libraries';
 import { users } from './auth';
 
+export type ReadingSessionSource = 'web' | 'kobo' | 'koreader';
+
 export const userBookStatus = pgTable(
   'user_book_status',
   {
@@ -86,6 +88,15 @@ export const readingProgress = pgTable(
     pageNumber: integer('page_number'),
     // Audio: playback position in seconds
     positionSeconds: real('position_seconds'),
+    // Kobo: spine XHTML resource used as Location.Source
+    koboLocationSource: varchar('kobo_location_source', { length: 4096 }),
+    // Kobo: exact bookmark location kind/value, usually KoboSpan + kobo.x.y for KEPUB
+    koboLocationType: varchar('kobo_location_type', { length: 64 }),
+    koboLocationValue: varchar('kobo_location_value', { length: 255 }),
+    // Kobo: progress within Location.Source
+    koboContentSourceProgressPercent: real('kobo_content_source_progress_percent'),
+    // KOReader: XPointer progress string generated from the EPUB DOM
+    koreaderProgress: text('koreader_progress'),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
       .defaultNow()
@@ -98,6 +109,10 @@ export const readingProgress = pgTable(
     check('reading_progress_percentage_range_chk', sql`${t.percentage} >= 0 and ${t.percentage} <= 100`),
     check('reading_progress_page_number_nonnegative_chk', sql`${t.pageNumber} is null or ${t.pageNumber} >= 0`),
     check('reading_progress_position_seconds_nonnegative_chk', sql`${t.positionSeconds} is null or ${t.positionSeconds} >= 0`),
+    check(
+      'reading_progress_kobo_content_source_progress_range_chk',
+      sql`${t.koboContentSourceProgressPercent} is null or (${t.koboContentSourceProgressPercent} >= 0 and ${t.koboContentSourceProgressPercent} <= 100)`,
+    ),
   ],
 );
 
@@ -123,12 +138,16 @@ export const readingSessions = pgTable(
     // Nullable: CBX with no percentage tracking may omit these.
     progressDelta: real('progress_delta'),
     endProgress: real('end_progress'),
+    // Which client produced the session. Kobo analytics also writes sessions here, so this is the only
+    // way to tell a genuine web-reader session apart from a device-origin one.
+    source: varchar('source', { length: 10 }).$type<ReadingSessionSource>().notNull().default('web'),
   },
   (t) => [
     uniqueIndex('rs_user_session_id_uidx').on(t.userId, t.sessionId),
     index('rs_user_started_at_idx').on(t.userId, t.startedAt),
     index('rs_book_file_started_at_idx').on(t.bookFileId, t.startedAt),
     index('rs_user_book_file_idx').on(t.userId, t.bookFileId),
+    check('reading_sessions_source_chk', sql`${t.source} in ('web', 'kobo', 'koreader')`),
     check('reading_sessions_duration_seconds_nonnegative_chk', sql`${t.durationSeconds} >= 0`),
     check('reading_sessions_end_progress_range_chk', sql`${t.endProgress} is null or (${t.endProgress} >= 0 and ${t.endProgress} <= 100)`),
     check('reading_sessions_ended_after_started_chk', sql`${t.endedAt} >= ${t.startedAt}`),

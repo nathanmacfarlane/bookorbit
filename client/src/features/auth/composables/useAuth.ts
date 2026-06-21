@@ -2,9 +2,12 @@ import { ref } from 'vue'
 import type { AuthUser, AuthResponse } from '@bookorbit/types'
 import { api, refreshAccessToken, setAccessToken, setOnAuthFailure } from '@/lib/api'
 import router from '@/router'
+import { cancelPendingDisplaySettingsSync, initDisplaySettingsSync, loadDisplaySettingsFromServer } from '@/composables/useDisplaySettingsSync'
+import { cancelPendingThemeSync, initThemeSync, loadFromServer } from '@/composables/useThemeSync'
 import { useSetupStatus } from './useSetupStatus'
 import { disconnectAuthorEnrichmentSocket } from '@/features/settings/composables/useAuthorEnrichmentStatus'
 import { disconnectBookMetadataFetchSocket } from '@/features/book-metadata-fetch/composables/useBookMetadataFetchStatus'
+import { resetWhatsNew } from '@/features/whats-new/composables/useWhatsNew'
 
 const SESSION_REFRESH_INTERVAL_MS = 5 * 60 * 1000
 
@@ -43,11 +46,14 @@ if (typeof document !== 'undefined') {
 }
 
 function clearAuth() {
+  cancelPendingThemeSync()
+  cancelPendingDisplaySettingsSync()
   stopSessionRefresh()
   user.value = null
   setAccessToken(null)
   disconnectAuthorEnrichmentSocket()
   disconnectBookMetadataFetchSocket()
+  resetWhatsNew()
 }
 
 setOnAuthFailure(() => {
@@ -62,16 +68,33 @@ async function me(): Promise<void> {
   user.value = await res.json()
 }
 
+async function hydrateThemeSync(options: { refreshUser?: boolean } = {}): Promise<void> {
+  if (options.refreshUser) {
+    await me()
+  }
+
+  if (user.value?.settings?.syncThemePreferences) {
+    await loadFromServer()
+    await loadDisplaySettingsFromServer()
+  }
+
+  initThemeSync()
+  initDisplaySettingsSync()
+}
+
 export function useAuth() {
   async function init(): Promise<void> {
     isLoading.value = true
     try {
       await refreshAccessToken()
       await me()
+      await hydrateThemeSync()
       startSessionRefresh()
     } catch {
       // no valid session
     } finally {
+      initThemeSync()
+      initDisplaySettingsSync()
       isLoading.value = false
     }
   }
@@ -92,9 +115,10 @@ export function useAuth() {
     const data: AuthResponse = await res.json()
     setAccessToken(data.accessToken)
     user.value = data.user
+    await hydrateThemeSync({ refreshUser: true })
     startSessionRefresh()
 
-    if (data.user.isDefaultPassword) {
+    if (user.value?.isDefaultPassword) {
       router.push('/')
     } else {
       const redirect = router.currentRoute.value.query.redirect as string | undefined
@@ -128,6 +152,7 @@ export function useAuth() {
     const data: AuthResponse = await res.json()
     setAccessToken(data.accessToken)
     user.value = data.user
+    await hydrateThemeSync()
     startSessionRefresh()
 
     useSetupStatus().markSetupComplete()
@@ -167,6 +192,7 @@ export function useAuth() {
     const data: AuthResponse = await res.json()
     setAccessToken(data.accessToken)
     user.value = data.user
+    await hydrateThemeSync()
     startSessionRefresh()
     router.push('/')
   }

@@ -7,6 +7,7 @@ import { KoreaderRepository } from './koreader.repository';
 import { KoreaderChapterService } from './koreader-chapter.service';
 import { KoreaderChapterExtractorService } from './koreader-chapter-extractor.service';
 import { UserBookStatusService } from '../user-book-status/user-book-status.service';
+import { AchievementEventsService, ACHIEVEMENT_EVENT_BOOK_PROGRESS_CHANGED } from '../achievement/achievement-events.service';
 
 const BCRYPT_ROUNDS = 12;
 const SYNC_EVENT = 'koreader.sync';
@@ -22,6 +23,7 @@ export class KoreaderService {
     private readonly chapterService: KoreaderChapterService,
     private readonly chapterExtractor: KoreaderChapterExtractorService,
     private readonly userBookStatusService: UserBookStatusService,
+    private readonly achievementEvents: AchievementEventsService,
   ) {}
 
   async createCredentials(userId: number, username: string, password: string) {
@@ -134,6 +136,13 @@ export class KoreaderService {
     const bookorbitPercentage = toBookorbitPercentage(data.percentage);
     await this.repo.upsertReadingProgress(bookFile.id, userId, bookorbitPercentage);
     await this.userBookStatusService.autoUpdate(userId, bookFile.bookId, bookorbitPercentage);
+    this.achievementEvents.emit(ACHIEVEMENT_EVENT_BOOK_PROGRESS_CHANGED, {
+      userId,
+      bookId: bookFile.bookId,
+      bookFileId: bookFile.id,
+      progress: bookorbitPercentage,
+      source: 'koreader',
+    });
 
     // Mark today as a reading day so streak/dashboard stats reflect KoReader activity
     const today = new Date().toISOString().slice(0, 10);
@@ -179,12 +188,8 @@ export class KoreaderService {
     }
 
     if (readingProg) {
-      // Convert the web reader's CFI spine index to a KOReader-compatible XPointer chapter start.
-      // The CFI encodes the spine item index directly (no file I/O needed — spine data is
-      // pre-computed in book_file_chapters during scan). KOReader will navigate to the
-      // beginning of the correct chapter. Percentage drives fine-grained position within it.
-      let xpointer: string | null = null;
-      if (readingProg.cfi) {
+      let xpointer = readingProg.koreaderProgress ?? null;
+      if (!xpointer && readingProg.cfi) {
         const chapterIndex = this.chapterService.parseChapterIndexFromCfi(readingProg.cfi);
         if (chapterIndex !== null && chapterIndex >= 0) {
           xpointer = `/body/DocFragment[${chapterIndex + 1}]/body`;

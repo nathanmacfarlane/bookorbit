@@ -35,7 +35,7 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Dependency review
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
@@ -155,7 +155,7 @@ jobs:
           done <<< "${issue_refs}"
 
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
 
@@ -194,7 +194,7 @@ jobs:
       client: ${{ steps.manual.outputs.client || steps.changes.outputs.client }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
 
@@ -276,7 +276,7 @@ jobs:
 
       - name: Checkout
         if: steps.has-changes.outputs.run == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Set up Node.js and pnpm
         if: steps.has-changes.outputs.run == 'true'
@@ -348,7 +348,7 @@ jobs:
 
       - name: Checkout
         if: steps.has-changes.outputs.run == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Set up Node.js and pnpm
         if: steps.has-changes.outputs.run == 'true'
@@ -392,6 +392,8 @@ jobs:
     permissions:
       contents: read
       checks: write
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - name: Check for package changes
         id: has-changes
@@ -410,7 +412,7 @@ jobs:
 
       - name: Checkout
         if: steps.has-changes.outputs.run == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Set up Node.js and pnpm
         if: steps.has-changes.outputs.run == 'true'
@@ -435,8 +437,32 @@ jobs:
           if [[ "$PACKAGE" == "server" ]]; then
             pnpm --filter server exec vitest --run --coverage --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit="$JUNIT_OUTPUT"
           else
-            pnpm --filter client exec vitest --run --reporter=default --reporter=junit --outputFile="$JUNIT_OUTPUT"
+            pnpm --filter client exec vitest --run --coverage --reporter=default --reporter=junit --outputFile="$JUNIT_OUTPUT"
           fi
+
+      - name: Upload coverage reports to Codecov
+        if: steps.has-changes.outputs.run == 'true' && env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          token: ${{ env.CODECOV_TOKEN }}
+          files: ${{ matrix.package == 'server' && 'server/coverage/lcov.info' || 'client/coverage/lcov.info' }}
+          flags: ${{ matrix.package }}
+          name: ${{ matrix.package }}-coverage
+          verbose: true
+
+      - name: Upload coverage reports to Codecov for fork PR
+        if: >
+          steps.has-changes.outputs.run == 'true' &&
+          env.CODECOV_TOKEN == '' &&
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name != github.repository &&
+          github.event.repository.private == false
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ${{ matrix.package == 'server' && 'server/coverage/lcov.info' || 'client/coverage/lcov.info' }}
+          flags: ${{ matrix.package }}
+          name: ${{ matrix.package }}-coverage
+          verbose: true
 
       - name: Publish test report annotations
         if: >
@@ -501,7 +527,7 @@ jobs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
 
@@ -571,7 +597,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Prepare PR image tag
         id: pr-meta
@@ -627,7 +653,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Prepare PR publish tag
         id: pr-meta

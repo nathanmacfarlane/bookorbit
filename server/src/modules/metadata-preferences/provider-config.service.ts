@@ -42,6 +42,10 @@ const DEFAULT_CONFIG: ProviderConfigurations = {
   audible: { enabled: false, domain: 'com' },
   audnexus: { enabled: false },
   comicvine: { enabled: false, apiKey: '' },
+  ranobedb: { enabled: false },
+  kobo: { enabled: false, country: 'us', language: 'en' },
+  lubimyczytac: { enabled: false },
+  aladin: { enabled: false, ttbKey: '' },
 };
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -114,6 +118,23 @@ function mergeComicVineConfig(base: ProviderConfigurations['comicvine'], value: 
   };
 }
 
+function mergeKoboConfig(base: ProviderConfigurations['kobo'], value: unknown): ProviderConfigurations['kobo'] {
+  const next = asObject(value);
+  return {
+    enabled: asBoolean(next.enabled, base.enabled),
+    country: asString(next.country, base.country),
+    language: asString(next.language, base.language),
+  };
+}
+
+function mergeAladinConfig(base: ProviderConfigurations['aladin'], value: unknown): ProviderConfigurations['aladin'] {
+  const next = asObject(value);
+  return {
+    enabled: asBoolean(next.enabled, base.enabled),
+    ttbKey: asString(next.ttbKey, base.ttbKey),
+  };
+}
+
 const PROVIDER_LABELS: Record<MetadataProviderKey, string> = {
   [MetadataProviderKey.GOOGLE]: 'Google Books',
   [MetadataProviderKey.AMAZON]: 'Amazon',
@@ -124,6 +145,10 @@ const PROVIDER_LABELS: Record<MetadataProviderKey, string> = {
   [MetadataProviderKey.AUDIBLE]: 'Audible',
   [MetadataProviderKey.AUDNEXUS]: 'AudNexus',
   [MetadataProviderKey.COMICVINE]: 'ComicVine',
+  [MetadataProviderKey.RANOBEDB]: 'RanobeDB',
+  [MetadataProviderKey.KOBO]: 'Kobo',
+  [MetadataProviderKey.LUBIMYCZYTAC]: 'LubimyCzytac',
+  [MetadataProviderKey.ALADIN]: 'Aladin',
 };
 
 type ProviderEnableRule = {
@@ -148,6 +173,11 @@ const PROVIDER_ENABLE_RULES = {
     blockedMessage: 'ComicVine requires an API key before it can be enabled',
     setupHint: 'API key required',
   },
+  aladin: {
+    canEnable: (config) => !!config.aladin.ttbKey.trim(),
+    blockedMessage: 'Aladin requires a TTB Key before it can be enabled',
+    setupHint: 'TTB Key required',
+  },
 } satisfies Partial<Record<keyof ProviderConfigurations, ProviderEnableRule>>;
 
 @Injectable()
@@ -167,6 +197,10 @@ export class ProviderConfigService {
       audible: { ...DEFAULT_CONFIG.audible },
       audnexus: { ...DEFAULT_CONFIG.audnexus },
       comicvine: { ...DEFAULT_CONFIG.comicvine },
+      ranobedb: { ...DEFAULT_CONFIG.ranobedb },
+      kobo: { ...DEFAULT_CONFIG.kobo },
+      lubimyczytac: { ...DEFAULT_CONFIG.lubimyczytac },
+      aladin: { ...DEFAULT_CONFIG.aladin },
     };
   }
 
@@ -182,6 +216,10 @@ export class ProviderConfigService {
       audible: mergeAudibleConfig(base.audible, next.audible),
       audnexus: mergeSimpleConfig(base.audnexus, next.audnexus),
       comicvine: mergeComicVineConfig(base.comicvine, next.comicvine),
+      ranobedb: mergeSimpleConfig(base.ranobedb, next.ranobedb),
+      kobo: mergeKoboConfig(base.kobo, next.kobo),
+      lubimyczytac: mergeSimpleConfig(base.lubimyczytac, next.lubimyczytac),
+      aladin: mergeAladinConfig(base.aladin, next.aladin),
     };
   }
 
@@ -247,6 +285,15 @@ export class ProviderConfigService {
         ...config.comicvine,
         apiKey: config.comicvine.apiKey.trim(),
       },
+      kobo: {
+        ...config.kobo,
+        country: this.normalizeKoboPathSegment(config.kobo.country, DEFAULT_CONFIG.kobo.country),
+        language: this.normalizeKoboPathSegment(config.kobo.language, DEFAULT_CONFIG.kobo.language),
+      },
+      aladin: {
+        ...config.aladin,
+        ttbKey: config.aladin.ttbKey.trim(),
+      },
     };
 
     if (!normalized.google.enabled || normalized.google.apiKey) return normalized;
@@ -268,6 +315,14 @@ export class ProviderConfigService {
       return normalized.slice('cookie:'.length).trim();
     }
     return normalized;
+  }
+
+  private normalizeKoboPathSegment(value: string, fallback: string): string {
+    const normalized = value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '');
+    return normalized || fallback;
   }
 
   private parsePersistedConfig(
@@ -383,6 +438,33 @@ export class ProviderConfigService {
         configured: !!this.getEnableRule('comicvine')?.canEnable(cfg),
         hint: !this.getEnableRule('comicvine')?.canEnable(cfg) ? this.getEnableRule('comicvine')?.setupHint : undefined,
       },
+      {
+        key: MetadataProviderKey.RANOBEDB,
+        label: PROVIDER_LABELS[MetadataProviderKey.RANOBEDB],
+        enabled: cfg.ranobedb.enabled,
+        configured: true,
+      },
+      {
+        key: MetadataProviderKey.KOBO,
+        label: PROVIDER_LABELS[MetadataProviderKey.KOBO],
+        enabled: cfg.kobo.enabled,
+        configured: true,
+        hint: 'Web scraping may be blocked by Kobo bot protection',
+      },
+      {
+        key: MetadataProviderKey.LUBIMYCZYTAC,
+        label: PROVIDER_LABELS[MetadataProviderKey.LUBIMYCZYTAC],
+        enabled: cfg.lubimyczytac.enabled,
+        configured: true,
+        hint: 'Polish book catalog (lubimyczytac.pl). Scrapes public pages.',
+      },
+      {
+        key: MetadataProviderKey.ALADIN,
+        label: PROVIDER_LABELS[MetadataProviderKey.ALADIN],
+        enabled: cfg.aladin.enabled,
+        configured: !!this.getEnableRule('aladin')?.canEnable(cfg),
+        hint: !this.getEnableRule('aladin')?.canEnable(cfg) ? this.getEnableRule('aladin')?.setupHint : undefined,
+      },
     ];
   }
 
@@ -416,6 +498,8 @@ export class ProviderConfigService {
         return this.testAmazonProvider(config.amazon);
       case MetadataProviderKey.HARDCOVER:
         return this.testHardcoverProvider(config.hardcover.apiKey);
+      case MetadataProviderKey.ALADIN:
+        return this.testAladinProvider(config.aladin.ttbKey);
       default:
         throw new BadRequestException(`Provider test not supported for ${key}`);
     }
@@ -526,5 +610,58 @@ export class ProviderConfigService {
       status: 'success',
       message: `Connected as ${username}.`,
     };
+  }
+
+  private async testAladinProvider(ttbKey: string): Promise<ProviderConnectionTestResult> {
+    const key = ttbKey.trim();
+    if (!key) {
+      return {
+        key: MetadataProviderKey.ALADIN,
+        ok: false,
+        status: 'fail',
+        message: 'Aladin TTB Key is required.',
+      };
+    }
+
+    const testUrl = `https://www.aladin.co.kr/ttb/api/ItemSearch.aspx?TTBKey=${encodeURIComponent(key)}&Query=%ED%8C%8C%EC%9D%B4%EC%8D%AC&QueryType=Keyword&MaxResults=1&start=1&SearchTarget=Book&output=JS&Version=20131101`;
+
+    try {
+      const response = await fetch(testUrl, { method: 'GET', signal: AbortSignal.timeout(PROVIDER_TEST_TIMEOUT_MS) });
+
+      if (!response.ok) {
+        return {
+          key: MetadataProviderKey.ALADIN,
+          ok: false,
+          status: 'fail',
+          message: `Aladin request failed with HTTP ${response.status}.`,
+        };
+      }
+
+      const body = (await response.json()) as { item?: unknown[]; errorCode?: number; errorMessage?: string };
+
+      if (body.errorCode) {
+        return {
+          key: MetadataProviderKey.ALADIN,
+          ok: false,
+          status: 'fail',
+          message: `Aladin API error: ${body.errorMessage ?? body.errorCode}`,
+        };
+      }
+
+      return {
+        key: MetadataProviderKey.ALADIN,
+        ok: true,
+        status: 'success',
+        message: 'Aladin API connection successful.',
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        key: MetadataProviderKey.ALADIN,
+        ok: false,
+        status: 'fail',
+        message: `Aladin connection test failed: ${message}`,
+      };
+    }
   }
 }

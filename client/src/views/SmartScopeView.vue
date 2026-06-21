@@ -23,12 +23,13 @@ import ViewHeader from '@/components/ViewHeader.vue'
 import SmartScopeEditorPanel from '@/features/smart-scope/components/SmartScopeEditorPanel.vue'
 import SelectionActionBar from '@/components/SelectionActionBar.vue'
 import AddToCollectionSheet from '@/features/collection/components/AddToCollectionSheet.vue'
-import BulkUpdateTagsDialog from '@/features/book/components/BulkUpdateTagsDialog.vue'
+import BulkEditMetadataDialog from '@/features/book/components/BulkEditMetadataDialog.vue'
 import MetadataExportDialog from '@/features/book/components/MetadataExportDialog.vue'
 import SendBookDialog from '@/features/email/components/SendBookDialog.vue'
 import DeleteBookDialog from '@/features/book/components/DeleteBookDialog.vue'
+import JumpRail from '@/features/book/components/JumpRail.vue'
 import { toast } from 'vue-sonner'
-import { useSmartScope } from '@/features/smart-scope/composables/useSmartScope'
+import { useBookViewWindow } from '@/features/book/composables/useBookViewWindow'
 import { useSmartScopes } from '@/features/smart-scope/composables/useSmartScopes'
 import { useDisplaySettings } from '@/composables/useDisplaySettings'
 import { useEffectiveViewMode } from '@/composables/useEffectiveViewMode'
@@ -44,7 +45,9 @@ import { useBookTableShell } from '@/features/book/composables/useBookTableShell
 import { useInfiniteScrollSentinel } from '@/features/book/composables/useInfiniteScrollSentinel'
 import { useSavedViews, type SavedView } from '@/features/book/composables/useSavedViews'
 import { usePermissions } from '@/features/auth/composables/usePermissions'
-import type { BookCard, GroupRule, SortField, SortSpec } from '@bookorbit/types'
+import { useBulkEditMetadata } from '@/features/book/composables/useBulkEditMetadata'
+import type { BulkEditFields } from '@/features/book/composables/useBulkEditMetadata'
+import type { BookCard, GroupRule, SortField } from '@bookorbit/types'
 import EntityNotFound from '@/components/EntityNotFound.vue'
 
 const route = useRoute()
@@ -54,7 +57,6 @@ const { hasPermission, isDemoRestrictedAccount } = usePermissions()
 const { smartScopeFilterExpanded } = useDisplaySettings()
 
 const smartScopeId = computed(() => Number(route.params.id))
-const tableSort = ref<SortSpec[]>([{ field: 'title', dir: 'asc' }])
 const coverAspectRatio = computed(() => DEFAULT_COVER_ASPECT_RATIO)
 const { coverSize, gridGap } = useViewDisplaySettings('smartScope', smartScopeId, coverAspectRatio)
 const { tableDensity } = useDisplaySettings()
@@ -62,17 +64,38 @@ const { allSavedViews, saveView, renameView, deleteView, duplicateView, toggleFa
 
 const { searchQuery, debouncedQuery, clearSearch } = useViewSearch()
 const {
-  items: books,
+  booksProxy: books,
+  slots,
   total,
   loading,
   initialized: booksInitialized,
   error: booksError,
-  hasMore,
-  load,
-  clear,
-} = useSmartScope(smartScopeId, debouncedQuery, tableSort)
+  sort: tableSort,
+  reset: resetBooks,
+  contiguousPrefix,
+  hasMorePrefix,
+  loadMorePrefix,
+  handleRange,
+  handleFirstVisibleIndex,
+  registerScroller,
+  handleJump,
+  buckets,
+  bucketKind,
+  refreshBuckets,
+  railVisible,
+  activeBucketKey,
+  letterTemplate,
+  railGutterReserved,
+  releaseRailGutter,
+} = useBookViewWindow({
+  scopeId: smartScopeId,
+  listEndpoint: (id) => `/api/v1/smart-scopes/${id}/books/query`,
+  bucketsEndpoint: (id) => `/api/v1/smart-scopes/${id}/books/jump-buckets`,
+  viewMode: effectiveViewMode,
+  q: debouncedQuery,
+})
 const { setBookContext } = useBookNavigation()
-useBookViewContext(books, total, () => load())
+useBookViewContext(slots, total, loadMorePrefix)
 const { smartScopes, loaded: smartScopesLoaded, error: smartScopesError, fetchSmartScopes, deleteSmartScope } = useSmartScopes()
 const smartScopeNotFound = ref(false)
 const smartScopeLoadError = computed(() => smartScopesError.value ?? booksError.value)
@@ -178,17 +201,17 @@ const {
   handleDownloadFiles,
   handleBulkSetStatus,
   handleBulkSetRating,
-  handleBulkUpdateTags,
   handleBulkSetField,
   handleBulkSetMetadataLock,
   handleDeleteSelected,
   addToCollectionOpen,
-  bulkTagsOpen,
+  bulkEditOpen,
   sendBookOpen,
   quickViewBookId,
   quickViewOpen,
   handleBookAction,
   handleTableBookUpdate,
+  handleEditIndividually,
 } = useBookTableShell({
   books,
 })
@@ -199,12 +222,27 @@ const visibleExportColumns = computed(() => {
   return tableRef.value.allColumns.filter((column) => column.visible).map((column) => column.id)
 })
 
+const { submit: submitBulkEdit, submitting: bulkEditSubmitting, selectedCount: bulkEditCount } = useBulkEditMetadata(selectedIds, books)
+
 function handleEditSelected() {
+  const count = selectedIds.value.size
+  if (count === 0) return
+  if (count >= 2) {
+    bulkEditOpen.value = true
+    return
+  }
   const ids = [...selectedIds.value]
-  if (ids.length === 0) return
   setBookContext(ids, ids.length)
   router.push({ name: 'book-detail', params: { bookId: ids[0] }, query: { tab: 'edit' } })
   exitSelectionMode()
+}
+
+async function handleBulkEditConfirm(fields: BulkEditFields) {
+  const result = await submitBulkEdit(fields)
+  if (result) {
+    bulkEditOpen.value = false
+    resetBooks()
+  }
 }
 
 watch(
@@ -274,14 +312,33 @@ function openMetadataExport() {
 }
 
 function onSaved() {
-  load(true)
+  resetBooks()
+  refreshBuckets()
 }
 
 const { sentinel } = useInfiniteScrollSentinel({
-  hasMore,
+  hasMore: hasMorePrefix,
   loading,
-  loadMore: () => load(),
+  loadMore: loadMorePrefix,
 })
+
+const bookGridRef = ref<{ scrollToIndex: (index: number) => void } | null>(null)
+
+watch(
+  [bookGridRef, tableRef, effectiveViewMode],
+  () => {
+    if (effectiveViewMode.value === 'grid' && bookGridRef.value) {
+      const grid = bookGridRef.value
+      registerScroller((index) => grid.scrollToIndex(index))
+    } else if (effectiveViewMode.value === 'table' && tableRef.value) {
+      const table = tableRef.value
+      registerScroller((index) => table.scrollToIndex(index))
+    } else {
+      registerScroller(null)
+    }
+  },
+  { immediate: true },
+)
 
 onMounted(async () => {
   await retrySmartScopeLoad()
@@ -289,24 +346,20 @@ onMounted(async () => {
 
 async function retrySmartScopeLoad() {
   smartScopeNotFound.value = false
-  clear()
   await fetchSmartScopes()
   if (smartScopesError.value) return
   if (!smartScope.value && smartScopesLoaded.value) {
     smartScopeNotFound.value = true
     return
   }
-  if (smartScope.value) {
-    await load(true)
+  if (smartScope.value && booksError.value) {
+    resetBooks()
   }
 }
 
 watch(smartScopeId, async () => {
   clearSearch()
   await retrySmartScopeLoad()
-})
-watch(debouncedQuery, () => {
-  if (smartScope.value) void load(true)
 })
 </script>
 
@@ -329,11 +382,11 @@ watch(debouncedQuery, () => {
     @export-metadata="openMetadataExport"
     @add-to-collection="addToCollectionOpen = true"
     @edit="handleEditSelected"
+    @edit-individually="handleEditIndividually"
     @refresh-metadata="handleBulkRefreshMetadata"
     @re-extract-cover="handleBulkReExtractCover"
     @set-status="handleBulkSetStatus"
     @set-rating="handleBulkSetRating"
-    @edit-tags="bulkTagsOpen = true"
     @set-field="handleBulkSetField"
     @lock-metadata="handleBulkSetMetadataLock"
     @delete="handleDeleteSelected"
@@ -358,7 +411,13 @@ watch(debouncedQuery, () => {
     @update:open="addToCollectionOpen = $event"
     @done="exitSelectionMode"
   />
-  <BulkUpdateTagsDialog :open="bulkTagsOpen" :book-count="selectedCount" @update:open="bulkTagsOpen = $event" @confirm="handleBulkUpdateTags" />
+  <BulkEditMetadataDialog
+    :open="bulkEditOpen"
+    :book-count="bulkEditCount"
+    :submitting="bulkEditSubmitting"
+    @update:open="bulkEditOpen = $event"
+    @confirm="handleBulkEditConfirm"
+  />
   <SendBookDialog :open="sendBookOpen" :book-ids="[...selectedIds]" @update:open="sendBookOpen = $event" @sent="exitSelectionMode" />
 
   <DeleteBookDialog :open="deleteBookId !== null" :deleting="deletingBook" @confirm="confirmDelete" @cancel="cancelDelete" />
@@ -585,19 +644,23 @@ watch(debouncedQuery, () => {
         <!-- Grid view -->
         <VirtualBookGrid
           v-if="effectiveViewMode === 'grid' && books.length > 0"
-          :books="books"
+          ref="bookGridRef"
+          :books="slots"
           :cover-size="coverSize"
           :grid-gap="gridGap"
           :selection-mode="selectionMode"
           :is-selected="isSelected"
+          :rail-gutter="railGutterReserved"
+          @range="handleRange"
+          @first-visible-index="handleFirstVisibleIndex"
           @action="handleBookAction"
           @select="handleSelect"
         />
 
         <!-- List view -->
-        <div v-if="effectiveViewMode === 'list' && books.length > 0" class="flex flex-col divide-y divide-border">
+        <div v-if="effectiveViewMode === 'list' && contiguousPrefix.length > 0" class="flex flex-col divide-y divide-border">
           <BookListRow
-            v-for="book in books"
+            v-for="book in contiguousPrefix"
             :key="book.id"
             :book="book"
             :selection-mode="selectionMode"
@@ -611,10 +674,9 @@ watch(debouncedQuery, () => {
         <VirtualBookTable
           v-if="effectiveViewMode === 'table'"
           ref="tableRef"
-          :books="books"
+          :books="slots"
           :in-flight="inFlight"
           :sort="tableSort"
-          :has-more="hasMore"
           :loading="loading"
           :total="total"
           view-type="smartScope"
@@ -626,15 +688,28 @@ watch(debouncedQuery, () => {
           @action="handleBookAction"
           @select="handleSelect"
           @update:book="handleTableBookUpdate"
-          @load-more="load"
+          @visible-range="handleRange"
+          @first-visible-index="handleFirstVisibleIndex"
           @select-all="handleSelectAllLoaded"
           @enter-selection="enterSelectionMode"
         />
 
-        <div v-if="effectiveViewMode !== 'table'" ref="sentinel" class="h-8 mt-4 flex items-center justify-center">
+        <div v-if="effectiveViewMode === 'list'" ref="sentinel" class="h-8 mt-4 flex items-center justify-center">
           <span v-if="loading" class="text-xs text-muted-foreground">Loading...</span>
-          <span v-else-if="!hasMore && books.length > 0" class="text-xs text-muted-foreground"> All {{ total.toLocaleString() }} books loaded </span>
+          <span v-else-if="!hasMorePrefix && contiguousPrefix.length > 0" class="text-xs text-muted-foreground">
+            All {{ total.toLocaleString() }} books loaded
+          </span>
         </div>
+
+        <JumpRail
+          :visible="railVisible"
+          :buckets="buckets"
+          :kind="bucketKind ?? 'letter'"
+          :active-key="activeBucketKey"
+          :template="bucketKind === 'letter' ? letterTemplate : undefined"
+          @jump="handleJump"
+          @after-leave="releaseRailGutter"
+        />
       </template>
     </main>
   </section>

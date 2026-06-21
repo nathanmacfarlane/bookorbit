@@ -94,7 +94,9 @@ export function useMetadataSearch() {
     'hardcover',
     'google',
     'itunes',
+    'kobo',
     'openLibrary',
+    'aladin',
   ]
 
   function sortResults(list: MetadataCandidate[]): MetadataCandidate[] {

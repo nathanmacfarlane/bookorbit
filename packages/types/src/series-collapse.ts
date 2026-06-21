@@ -8,7 +8,11 @@ export type CollapsedSeriesInfo = {
   bookCount: number;
   readCount: number;
   coverBookIds: number[];
+  coverUpdatedAtByBookId?: Record<number, string | null>;
   seriesLatestAddedAt: string | null;
+  firstVolumeBookId?: number | null;
+  latestVolumeBookId?: number | null;
+  firstUnreadBookId?: number | null;
 };
 
 export function resolveCollapsePreference(prefs: SeriesCollapsePreferences | undefined, ctx: { libraryId?: number; collectionId?: number }): boolean {

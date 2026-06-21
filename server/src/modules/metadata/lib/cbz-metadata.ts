@@ -44,6 +44,10 @@ export interface ParsedCbzMetadata {
   amazonId: string | null;
   hardcoverId: string | null;
   openLibraryId: string | null;
+  ranobedbId: string | null;
+  koboId: string | null;
+  lubimyczytacId: string | null;
+  aladinId: string | null;
   itunesId: string | null;
   comicMetadata: ParsedCbzComicMetadata | null;
 }
@@ -154,7 +158,7 @@ function parseProjectxManagedNotes(notes: string | null): Map<string, string> {
 
 function parseProviderIdsFromWebUrl(
   webUrl: string | null,
-): Partial<Record<'goodreadsId' | 'amazonId' | 'hardcoverId' | 'googleBooksId' | 'openLibraryId', string>> {
+): Partial<Record<'goodreadsId' | 'amazonId' | 'hardcoverId' | 'googleBooksId' | 'openLibraryId' | 'koboId', string>> {
   if (!webUrl) return {};
 
   if (webUrl.startsWith('https://www.goodreads.com/book/show/')) {
@@ -171,6 +175,9 @@ function parseProviderIdsFromWebUrl(
   }
   if (webUrl.startsWith('https://openlibrary.org/works/')) {
     return { openLibraryId: webUrl.slice('https://openlibrary.org/works/'.length) || '' };
+  }
+  if (webUrl.startsWith('https://www.kobo.com/us/en/ebook/')) {
+    return { koboId: webUrl.slice('https://www.kobo.com/us/en/ebook/'.length) || '' };
   }
 
   return {};
@@ -260,6 +267,10 @@ function parseComicInfoXml(xmlBuf: Buffer): ParsedCbzMetadata | null {
       amazonId: managedNotes.get('amazonId') ?? providerIdsFromWeb.amazonId ?? null,
       hardcoverId: managedNotes.get('hardcoverId') ?? providerIdsFromWeb.hardcoverId ?? null,
       openLibraryId: managedNotes.get('openLibraryId') ?? providerIdsFromWeb.openLibraryId ?? null,
+      ranobedbId: managedNotes.get('ranobedbId') ?? null,
+      koboId: managedNotes.get('koboId') ?? providerIdsFromWeb.koboId ?? null,
+      lubimyczytacId: managedNotes.get('lubimyczytacId') ?? null,
+      aladinId: managedNotes.get('aladinId') ?? null,
       itunesId: null,
       comicMetadata: hasComicFields
         ? {
@@ -315,6 +326,10 @@ function parseComicBookInfoJson(comment: string): ParsedCbzMetadata | null {
       amazonId: null,
       hardcoverId: null,
       openLibraryId: null,
+      ranobedbId: null,
+      koboId: null,
+      lubimyczytacId: null,
+      aladinId: null,
       itunesId: null,
       comicMetadata: null,
     };

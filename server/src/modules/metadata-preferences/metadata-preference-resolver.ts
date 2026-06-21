@@ -12,10 +12,13 @@ import {
   MergeStrategy,
 } from '@bookorbit/types';
 
+import { normalizeGenreBlocklist } from '../../common/utils/genre-blocklist.utils';
+
 const DEFAULT_PROVIDER_ORDER: MetadataProviderKey[] = [
   MetadataProviderKey.GOODREADS,
   MetadataProviderKey.GOOGLE,
   MetadataProviderKey.AMAZON,
+  MetadataProviderKey.KOBO,
   MetadataProviderKey.OPEN_LIBRARY,
 ];
 
@@ -28,6 +31,7 @@ const PROVIDERS_WITH_ITUNES: MetadataProviderKey[] = [
   MetadataProviderKey.GOOGLE,
   MetadataProviderKey.ITUNES,
   MetadataProviderKey.AMAZON,
+  MetadataProviderKey.KOBO,
   MetadataProviderKey.OPEN_LIBRARY,
 ];
 
@@ -39,13 +43,14 @@ const FIELD_DEFAULTS: Partial<Record<MetadataField, Partial<FieldPreference>>> =
     providers: [
       MetadataProviderKey.AMAZON,
       MetadataProviderKey.ITUNES,
+      MetadataProviderKey.KOBO,
       MetadataProviderKey.GOODREADS,
       MetadataProviderKey.GOOGLE,
       MetadataProviderKey.OPEN_LIBRARY,
     ],
   },
   authors: { providers: PROVIDERS_WITH_ITUNES },
-  genres: { providers: [MetadataProviderKey.GOODREADS, MetadataProviderKey.GOOGLE, MetadataProviderKey.ITUNES] },
+  genres: { providers: [MetadataProviderKey.GOODREADS, MetadataProviderKey.GOOGLE, MetadataProviderKey.ITUNES, MetadataProviderKey.KOBO] },
 };
 
 @Injectable()
@@ -64,6 +69,7 @@ export class MetadataPreferenceResolver {
     const options: MetadataFetchOptions = {
       genres: {
         mode: 'merge',
+        blocklist: [],
       },
       saveProviderIds: true,
     };
@@ -124,7 +130,7 @@ export class MetadataPreferenceResolver {
 
   private normalizeOptions(value: unknown, fallback: MetadataFetchOptions): MetadataFetchOptions {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      return { genres: { ...fallback.genres }, saveProviderIds: fallback.saveProviderIds };
+      return { genres: { ...fallback.genres, blocklist: [...fallback.genres.blocklist] }, saveProviderIds: fallback.saveProviderIds };
     }
 
     const candidate = value as Partial<MetadataFetchOptions>;
@@ -134,10 +140,11 @@ export class MetadataPreferenceResolver {
     const mode = GENRE_MERGE_MODE_SET.has(genresCandidate.mode as MetadataFetchOptions['genres']['mode'])
       ? (genresCandidate.mode as MetadataFetchOptions['genres']['mode'])
       : fallback.genres.mode;
+    const blocklist = normalizeGenreBlocklist(genresCandidate.blocklist, fallback.genres.blocklist);
     const saveProviderIds = typeof candidate.saveProviderIds === 'boolean' ? candidate.saveProviderIds : fallback.saveProviderIds;
 
     return {
-      genres: { mode },
+      genres: { mode, blocklist },
       saveProviderIds,
     };
   }

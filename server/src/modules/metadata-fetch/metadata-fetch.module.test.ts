@@ -17,6 +17,10 @@ import { AudibleProvider } from './providers/audible/audible.provider';
 import { AudnexusProvider } from './providers/audnexus/audnexus.provider';
 import { HardcoverProvider } from './providers/hardcover/hardcover.provider';
 import { ComicVineProvider } from './providers/comicvine/comicvine.provider';
+import { KoboProvider } from './providers/kobo/kobo.provider';
+import { RanobeDbProvider } from './providers/ranobedb/ranobedb.provider';
+import { LubimyczytacProvider } from './providers/lubimyczytac/lubimyczytac.provider';
+import { AladinProvider } from './providers/aladin/aladin.provider';
 
 describe('MetadataFetchModule', () => {
   it('registers provider classes and factory wiring for METADATA_PROVIDERS', () => {
@@ -33,6 +37,10 @@ describe('MetadataFetchModule', () => {
         AudnexusProvider,
         HardcoverProvider,
         ComicVineProvider,
+        RanobeDbProvider,
+        KoboProvider,
+        LubimyczytacProvider,
+        AladinProvider,
         ProviderRegistry,
         MetadataFetchRepository,
         MetadataFetchService,
@@ -56,6 +64,10 @@ describe('MetadataFetchModule', () => {
       AudnexusProvider,
       HardcoverProvider,
       ComicVineProvider,
+      RanobeDbProvider,
+      KoboProvider,
+      LubimyczytacProvider,
+      AladinProvider,
     ]);
 
     const google = { key: 'google' };

@@ -38,6 +38,15 @@ describe('BookMetadataLockService', () => {
     await expect(service.assertManualUpdateAllowed(12, dto)).resolves.toBeUndefined();
   });
 
+  it('passes transaction executors through lock replacement', async () => {
+    const { service, lockRepo } = makeService();
+    const tx = { id: 'tx' };
+
+    await service.replaceLockedFields(12, ['cover'], tx as never);
+
+    expect(lockRepo.replaceLockedFields).toHaveBeenCalledWith(12, ['cover'], tx);
+  });
+
   it('filters automated dto updates and preserves unlocked chapters', async () => {
     const { service } = makeService(['title', 'narrators', 'comicIssueNumber', 'googleBooksId']);
 

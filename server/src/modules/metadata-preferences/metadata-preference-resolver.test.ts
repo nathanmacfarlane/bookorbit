@@ -22,6 +22,7 @@ describe('MetadataPreferenceResolver', () => {
         MetadataProviderKey.GOOGLE,
         MetadataProviderKey.ITUNES,
         MetadataProviderKey.AMAZON,
+        MetadataProviderKey.KOBO,
         MetadataProviderKey.OPEN_LIBRARY,
       ]);
     }
@@ -29,12 +30,18 @@ describe('MetadataPreferenceResolver', () => {
     expect(defaults.fields.cover.providers).toEqual([
       MetadataProviderKey.AMAZON,
       MetadataProviderKey.ITUNES,
+      MetadataProviderKey.KOBO,
       MetadataProviderKey.GOODREADS,
       MetadataProviderKey.GOOGLE,
       MetadataProviderKey.OPEN_LIBRARY,
     ]);
 
-    expect(defaults.fields.genres.providers).toEqual([MetadataProviderKey.GOODREADS, MetadataProviderKey.GOOGLE, MetadataProviderKey.ITUNES]);
+    expect(defaults.fields.genres.providers).toEqual([
+      MetadataProviderKey.GOODREADS,
+      MetadataProviderKey.GOOGLE,
+      MetadataProviderKey.ITUNES,
+      MetadataProviderKey.KOBO,
+    ]);
 
     const fieldsWithoutItunes: (keyof typeof defaults.fields)[] = [
       'publisher',
@@ -50,6 +57,7 @@ describe('MetadataPreferenceResolver', () => {
         MetadataProviderKey.GOODREADS,
         MetadataProviderKey.GOOGLE,
         MetadataProviderKey.AMAZON,
+        MetadataProviderKey.KOBO,
         MetadataProviderKey.OPEN_LIBRARY,
       ]);
     }
@@ -57,7 +65,7 @@ describe('MetadataPreferenceResolver', () => {
     expect(defaults.fields.title.mergeStrategy).toBe('fillMissing');
     expect(defaults.fields.description.mergeStrategy).toBe('overwriteIfProvided');
     expect(defaults.options).toEqual({
-      genres: { mode: 'merge' },
+      genres: { mode: 'merge', blocklist: [] },
       saveProviderIds: true,
     });
   });
@@ -114,7 +122,7 @@ describe('MetadataPreferenceResolver', () => {
     const malformed = {
       fields: defaults.fields,
       options: {
-        genres: { mode: 'invalid' },
+        genres: { mode: 'invalid', blocklist: [42] },
         saveProviderIds: 'yes',
       },
     } as unknown as MetadataFetchPreferences;
@@ -122,6 +130,24 @@ describe('MetadataPreferenceResolver', () => {
     const resolved = resolver.resolve(malformed, null);
 
     expect(resolved.options).toEqual(defaults.options);
+  });
+
+  it('normalizes genre blocklist values with case-insensitive de-duplication', () => {
+    const defaults = resolver.getDefaultPreferences();
+    const preferences = {
+      fields: defaults.fields,
+      options: {
+        genres: {
+          mode: 'merge',
+          blocklist: [' Audiobook ', 'adult', 'AUDIOBOOK', '', 'Graphic Novel'],
+        },
+        saveProviderIds: true,
+      },
+    } as unknown as MetadataFetchPreferences;
+
+    const resolved = resolver.resolve(preferences, null);
+
+    expect(resolved.options?.genres.blocklist).toEqual(['Audiobook', 'adult', 'Graphic Novel']);
   });
 
   it('preserves explicit provider selections when applying forward compatibility', () => {

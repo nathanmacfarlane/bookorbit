@@ -72,6 +72,10 @@ describe('ProviderConfigService', () => {
       audible: { enabled: false, domain: 'com' },
       audnexus: { enabled: false },
       comicvine: { enabled: false, apiKey: '' },
+      ranobedb: { enabled: false },
+      kobo: { enabled: false, country: 'us', language: 'en' },
+      lubimyczytac: { enabled: false },
+      aladin: { enabled: false, ttbKey: '' },
     });
   });
 
@@ -352,6 +356,10 @@ describe('ProviderConfigService', () => {
       audible: { enabled: false, domain: 'com' },
       audnexus: { enabled: false },
       comicvine: { enabled: false, apiKey: '' },
+      ranobedb: { enabled: false },
+      kobo: { enabled: false, country: 'us', language: 'en' },
+      lubimyczytac: { enabled: false },
+      aladin: { enabled: false, ttbKey: '' },
     });
 
     expect(statuses.map((s) => s.key)).toEqual([
@@ -364,6 +372,10 @@ describe('ProviderConfigService', () => {
       MetadataProviderKey.AUDIBLE,
       MetadataProviderKey.AUDNEXUS,
       MetadataProviderKey.COMICVINE,
+      MetadataProviderKey.RANOBEDB,
+      MetadataProviderKey.KOBO,
+      MetadataProviderKey.LUBIMYCZYTAC,
+      MetadataProviderKey.ALADIN,
     ]);
     expect(statuses.find((s) => s.key === MetadataProviderKey.GOOGLE)?.configured).toBe(false);
     expect(statuses.find((s) => s.key === MetadataProviderKey.GOOGLE)?.hint).toContain('API key required');
@@ -386,6 +398,10 @@ describe('ProviderConfigService', () => {
       audible: { enabled: false, domain: 'com' },
       audnexus: { enabled: false },
       comicvine: { enabled: false, apiKey: '' },
+      ranobedb: { enabled: false },
+      kobo: { enabled: false, country: 'us', language: 'en' },
+      lubimyczytac: { enabled: false },
+      aladin: { enabled: false, ttbKey: '' },
     });
 
     expect(statuses.find((s) => s.key === MetadataProviderKey.HARDCOVER)?.configured).toBe(true);

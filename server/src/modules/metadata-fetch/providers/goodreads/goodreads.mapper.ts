@@ -1,6 +1,6 @@
 import { MetadataCandidate, MetadataProviderKey } from '@bookorbit/types';
 
-import { GoodreadsApolloBook, GoodreadsApolloContributor, GoodreadsApolloSeries } from './goodreads.types';
+import { GoodreadsApolloBook, GoodreadsApolloContributor, GoodreadsApolloSeries, GoodreadsAutocompleteItem } from './goodreads.types';
 
 export function mapGoodreadsApolloState(state: Record<string, unknown>, bookId: string): MetadataCandidate | null {
   const book = findBook(state, bookId);
@@ -8,7 +8,7 @@ export function mapGoodreadsApolloState(state: Record<string, unknown>, bookId: 
 
   const firstSeries = book.bookSeries?.[0];
   const seriesRef = firstSeries?.series?.__ref;
-  const series = findSeries(state, seriesRef);
+  const series = findSeries(state, seriesRef) ?? firstSeries?.series;
 
   const primaryContributorRef = book.primaryContributorEdge?.node?.__ref;
   const contributor = findContributor(state, primaryContributorRef);
@@ -45,6 +45,63 @@ export function mapGoodreadsApolloState(state: Record<string, unknown>, bookId: 
   };
 }
 
+export function mapGoodreadsAutocompleteItem(item: GoodreadsAutocompleteItem, bookId: string): MetadataCandidate | null {
+  const rawTitle = normalize(item.bookTitleBare) ?? normalize(stripSeriesSuffix(item.title));
+  if (!rawTitle) return null;
+
+  const { title, subtitle } = splitTitle(rawTitle);
+  const authorName = normalize(typeof item.author === 'string' ? item.author : item.author?.name);
+  const { seriesName, seriesIndex } = parseSeriesFromTitle(item.title);
+
+  return {
+    provider: MetadataProviderKey.GOODREADS,
+    providerId: bookId,
+    title,
+    subtitle,
+    authors: authorName ? [authorName] : undefined,
+    description: extractAutocompleteDescription(item.description),
+    pageCount: parsePositiveInt(item.numPages),
+    coverUrl: upgradeCoverUrl(item.imageUrl),
+    sourceUrl: `https://www.goodreads.com/book/show/${bookId}`,
+    seriesName,
+    seriesIndex,
+  };
+}
+
+// Autocomplete cover URLs carry a thumbnail size token (e.g. `._SY75_`).
+// Stripping it yields the full-resolution image.
+function upgradeCoverUrl(url: string | undefined): string | undefined {
+  const normalized = normalize(url);
+  return normalized ? normalized.replace(/\._S[XY]\d+_\./, '.') : undefined;
+}
+
+function stripSeriesSuffix(title: string | undefined): string | undefined {
+  return title?.replace(/\s*\([^,(]+,\s*#[\d.]+\)\s*$/, '').trim();
+}
+
+function parseSeriesFromTitle(title: string | undefined): { seriesName?: string; seriesIndex?: number } {
+  const match = title?.match(/\(([^,(]+),\s*#([\d.]+)\)\s*$/);
+  if (!match) return {};
+  return { seriesName: normalize(match[1]), seriesIndex: parseSeriesIndex(match[2]) };
+}
+
+function extractAutocompleteDescription(description: GoodreadsAutocompleteItem['description']): string | undefined {
+  const html = typeof description === 'string' ? description : description?.html;
+  if (!html) return undefined;
+  const text = html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&quot;/g, '"')
+    .replace(/&(?:#39|#x27|apos);/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return text || undefined;
+}
+
 function findByKeyPrefix<T>(state: Record<string, unknown>, prefix: string): T | undefined {
   const key = Object.keys(state).find((k) => k.startsWith(prefix));
   return key ? (state[key] as T) : undefined;
@@ -52,9 +109,33 @@ function findByKeyPrefix<T>(state: Record<string, unknown>, prefix: string): T |
 
 function findBook(state: Record<string, unknown>, bookId: string): GoodreadsApolloBook | undefined {
   const exact = state[`Book:kca:${bookId}`] as GoodreadsApolloBook | undefined;
-  if (exact?.title) return exact;
+  if (isTitledBook(exact)) return exact;
 
-  return findByKeyPrefix<GoodreadsApolloBook>(state, 'Book:kca:');
+  const books = Object.keys(state)
+    .filter((key) => key.startsWith('Book:kca:'))
+    .map((key) => state[key] as GoodreadsApolloBook | undefined)
+    .filter((book): book is GoodreadsApolloBook => !!book);
+
+  const legacyMatch = books.find((book) => isTitledBook(book) && String(book.legacyId) === bookId);
+  if (legacyMatch) return legacyMatch;
+
+  return books.filter(isTitledBook).sort((a, b) => scoreBookShape(b) - scoreBookShape(a))[0];
+}
+
+function isTitledBook(book: GoodreadsApolloBook | undefined): book is GoodreadsApolloBook & { title: string } {
+  return typeof book?.title === 'string' && book.title.trim().length > 0;
+}
+
+function scoreBookShape(book: GoodreadsApolloBook): number {
+  let score = 0;
+  if (book.title) score += 8;
+  if (book.description) score += 4;
+  if (book.details) score += 4;
+  if (book.primaryContributorEdge) score += 2;
+  if (book.bookGenres?.length) score += 2;
+  if (book.imageUrl) score += 2;
+  if (book.bookSeries?.length) score += 1;
+  return score;
 }
 
 function findContributor(state: Record<string, unknown>, ref: string | undefined): GoodreadsApolloContributor | undefined {

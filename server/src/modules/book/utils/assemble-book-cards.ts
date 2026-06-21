@@ -18,6 +18,7 @@ type BookRow = {
   addedAt: Date;
   updatedAt?: Date;
   title: string | null;
+  seriesId?: number | null;
   seriesName: string | null;
   seriesIndex: number | null;
   publishedYear: number | null;
@@ -36,12 +37,17 @@ type CollapsedBookRow = BookRow & {
   bookCount: number | null;
   readCount: number | null;
   coverBookIds: number[] | null;
+  coverUpdatedAtByBookId?: Record<number, Date | null> | null;
   seriesLatestAddedAt: Date | null;
+  firstVolumeBookId: number | null;
+  latestVolumeBookId: number | null;
+  firstUnreadBookId: number | null;
 };
 
 type NameRow = { bookId: number; name: string };
 type NarratorRow = { bookId: number; name: string };
 type FileRow = { bookId: number; id: number; format: string | null; role: string; sizeBytes: number | null };
+type SeriesMembershipRow = { bookId: number; seriesId: number; seriesName: string; seriesIndex: number | null; displayOrder: number };
 type ProgressRow = { bookFileId: number; percentage: number | null };
 type StatusRow = {
   bookId: number;
@@ -52,6 +58,14 @@ type StatusRow = {
   updatedAt: Date;
 };
 
+function serializeDateByBookId(values: Record<number, Date | null> | null | undefined): Record<number, string | null> {
+  const result: Record<number, string | null> = {};
+  for (const [bookId, value] of Object.entries(values ?? {})) {
+    result[Number(bookId)] = value?.toISOString() ?? null;
+  }
+  return result;
+}
+
 export function assembleBookCards(
   rows: BookRow[],
   authorRows: NameRow[],
@@ -61,6 +75,7 @@ export function assembleBookCards(
   statusRows: StatusRow[] = [],
   narratorRows: NarratorRow[] = [],
   tagRows: NameRow[] = [],
+  seriesMembershipRows: SeriesMembershipRow[] = [],
 ): BookCard[] {
   const authorsByBook = new Map<number, string[]>();
   for (const row of authorRows) {
@@ -113,6 +128,13 @@ export function assembleBookCards(
     tagsByBook.set(row.bookId, list);
   }
 
+  const seriesMembershipsByBook = new Map<number, SeriesMembershipRow[]>();
+  for (const row of seriesMembershipRows) {
+    const list = seriesMembershipsByBook.get(row.bookId) ?? [];
+    list.push(row);
+    seriesMembershipsByBook.set(row.bookId, list);
+  }
+
   return rows.map((row) => {
     const rawFiles = filesByBook.get(row.id) ?? [];
     const primaryFile =
@@ -133,8 +155,18 @@ export function assembleBookCards(
       id: row.id,
       status: row.status,
       title: row.title ?? basename(row.folderPath),
+      seriesId: row.seriesId ?? null,
       seriesName: row.seriesName ?? null,
       seriesIndex: row.seriesIndex ?? null,
+      seriesMemberships: (seriesMembershipsByBook.get(row.id) ?? [])
+        .slice()
+        .sort((a, b) => a.displayOrder - b.displayOrder || a.seriesId - b.seriesId)
+        .map((membership) => ({
+          seriesId: membership.seriesId,
+          seriesName: membership.seriesName,
+          seriesIndex: membership.seriesIndex,
+          displayOrder: membership.displayOrder,
+        })),
       authors: authorsByBook.get(row.id) ?? [],
       files,
       publishedYear: row.publishedYear ?? null,
@@ -168,8 +200,9 @@ export function assembleCollapsedBookCards(
   statusRows: StatusRow[] = [],
   narratorRows: NarratorRow[] = [],
   tagRows: NameRow[] = [],
+  seriesMembershipRows: SeriesMembershipRow[] = [],
 ): BookCard[] {
-  const base = assembleBookCards(rows, authorRows, fileRows, genreRows, progressRows, statusRows, narratorRows, tagRows);
+  const base = assembleBookCards(rows, authorRows, fileRows, genreRows, progressRows, statusRows, narratorRows, tagRows, seriesMembershipRows);
 
   for (let i = 0; i < base.length; i++) {
     const row = rows[i];
@@ -178,7 +211,14 @@ export function assembleCollapsedBookCards(
         bookCount: row.bookCount,
         readCount: row.readCount ?? 0,
         coverBookIds: row.coverBookIds ?? [],
+        coverUpdatedAtByBookId: {
+          ...serializeDateByBookId(row.coverUpdatedAtByBookId),
+          [row.id]: row.updatedAt?.toISOString() ?? row.addedAt.toISOString(),
+        },
         seriesLatestAddedAt: row.seriesLatestAddedAt?.toISOString() ?? null,
+        firstVolumeBookId: row.firstVolumeBookId ?? null,
+        latestVolumeBookId: row.latestVolumeBookId ?? null,
+        firstUnreadBookId: row.firstUnreadBookId ?? null,
       };
       base[i] = { ...base[i]!, collapsedSeries: collapsed };
     }
@@ -230,11 +270,18 @@ export function collapseBookCards(cards: BookCard[]): BookCard[] {
       .map((b) => b.id);
     const fallbackIds = sorted.slice(0, 4).map((b) => b.id);
 
+    const firstUnread = sorted.find((b) => b.readStatus?.status !== 'read');
+    const lastWithIndex = sorted.findLast((b) => b.seriesIndex !== null);
+
     representative.collapsedSeries = {
       bookCount: group.length,
       readCount,
       coverBookIds: coverIds.length > 0 ? coverIds : fallbackIds,
+      coverUpdatedAtByBookId: Object.fromEntries(group.map((book) => [book.id, book.updatedAt ?? book.addedAt])),
       seriesLatestAddedAt,
+      firstVolumeBookId: sorted[0]!.id,
+      latestVolumeBookId: (lastWithIndex ?? sorted[sorted.length - 1]!).id,
+      firstUnreadBookId: firstUnread?.id ?? null,
     };
     result.push({ index: firstIndex, card: representative });
   }

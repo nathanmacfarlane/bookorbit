@@ -121,11 +121,21 @@ describe('Book DTO validation', () => {
 
   it('validates SaveProgressDto percentage bounds and conditional field types', async () => {
     expect((await errorsFor(SaveProgressDto, { percentage: 0 })).length).toBe(0);
-    expect((await errorsFor(SaveProgressDto, { percentage: 100, cfi: 'epubcfi(/6/2)', pageNumber: 5 })).length).toBe(0);
+    expect(
+      (
+        await errorsFor(SaveProgressDto, {
+          percentage: 100,
+          cfi: 'epubcfi(/6/2)',
+          pageNumber: 5,
+          koreaderProgress: '/body/DocFragment[2]/body/p[1]/text()[1].0',
+        })
+      ).length,
+    ).toBe(0);
 
     expect((await errorsFor(SaveProgressDto, { percentage: -1 })).length).toBeGreaterThan(0);
     expect((await errorsFor(SaveProgressDto, { percentage: 50, cfi: 123 })).length).toBeGreaterThan(0);
     expect((await errorsFor(SaveProgressDto, { percentage: 50, pageNumber: 'five' })).length).toBeGreaterThan(0);
+    expect((await errorsFor(SaveProgressDto, { percentage: 50, koreaderProgress: 123 })).length).toBeGreaterThan(0);
   });
 
   it('requires non-empty search text and bounds search limit', async () => {
@@ -160,8 +170,35 @@ describe('Book DTO validation', () => {
     expect((await errorsFor(UpdateBookMetadataDto, { publishedYear: 999 })).length).toBeGreaterThan(0);
     expect((await errorsFor(UpdateBookMetadataDto, { publishedYear: 2201 })).length).toBeGreaterThan(0);
     expect((await errorsFor(UpdateBookMetadataDto, { authors: ['ok', 1] })).length).toBeGreaterThan(0);
-    expect((await errorsFor(UpdateBookMetadataDto, { language: 'english-too-long' })).length).toBeGreaterThan(0);
+    expect((await errorsFor(UpdateBookMetadataDto, { language: 'a'.repeat(101) })).length).toBeGreaterThan(0);
     expect((await errorsFor(UpdateBookMetadataDto, { isbn10: '12345678901' })).length).toBeGreaterThan(0);
+  });
+
+  it('accepts aladinId and enforces its length bound', async () => {
+    expect((await errorsFor(UpdateBookMetadataDto, { aladinId: '12345' })).length).toBe(0);
+    expect((await errorsFor(UpdateBookMetadataDto, { aladinId: null })).length).toBe(0);
+    expect((await errorsFor(UpdateBookMetadataDto, { aladinId: 'a'.repeat(21) })).length).toBeGreaterThan(0);
+  });
+
+  it('normalizes a zero page count to null and validates other page count values', async () => {
+    // A provider can return a page count of 0 (issue #329); it must normalize to null instead of failing validation.
+    const zeroed = plainToInstance(UpdateBookMetadataDto, { pageCount: 0 });
+    expect((await validate(zeroed)).length).toBe(0);
+    expect(zeroed.pageCount).toBeNull();
+
+    const valid = plainToInstance(UpdateBookMetadataDto, { pageCount: 320 });
+    expect((await validate(valid)).length).toBe(0);
+    expect(valid.pageCount).toBe(320);
+
+    expect((await errorsFor(UpdateBookMetadataDto, { pageCount: null })).length).toBe(0);
+    expect((await errorsFor(UpdateBookMetadataDto, { pageCount: -5 })).length).toBeGreaterThan(0);
+    expect((await errorsFor(UpdateBookMetadataDto, { pageCount: 12.5 })).length).toBeGreaterThan(0);
+  });
+
+  it('validates nested comicMetadata fields', async () => {
+    expect((await errorsFor(UpdateBookMetadataDto, { comicMetadata: { issueNumber: '1', characters: ['Batman'] } })).length).toBe(0);
+    expect((await errorsFor(UpdateBookMetadataDto, { comicMetadata: { issueNumber: 1 } })).length).toBeGreaterThan(0);
+    expect((await errorsFor(UpdateBookMetadataDto, { comicMetadata: { characters: [1] } })).length).toBeGreaterThan(0);
   });
 
   it('validates inline-edit single-field patches for table view use cases', async () => {
@@ -173,6 +210,8 @@ describe('Book DTO validation', () => {
     expect((await errorsFor(UpdateBookMetadataDto, { seriesName: null, seriesIndex: null })).length).toBe(0);
     // Language valid 2-letter code
     expect((await errorsFor(UpdateBookMetadataDto, { language: 'en' })).length).toBe(0);
+    // Language full name (e.g. from epub/provider)
+    expect((await errorsFor(UpdateBookMetadataDto, { language: 'Spanish; Castilian' })).length).toBe(0);
     // Language cleared to null
     expect((await errorsFor(UpdateBookMetadataDto, { language: null })).length).toBe(0);
     // Rating null (clear rating)

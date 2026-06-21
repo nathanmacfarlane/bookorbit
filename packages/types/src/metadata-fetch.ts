@@ -10,6 +10,10 @@ export const MetadataProviderKey = {
   AUDIBLE: "audible",
   AUDNEXUS: "audnexus",
   COMICVINE: "comicvine",
+  RANOBEDB: "ranobedb",
+  KOBO: "kobo",
+  LUBIMYCZYTAC: "lubimyczytac",
+  ALADIN: "aladin",
 } as const;
 
 export interface ComicMetadataFields {
@@ -58,6 +62,20 @@ export interface MetadataProviderInfo {
   key: MetadataProviderKey;
   label: string;
   identifiable: boolean;
+}
+
+export type MetadataFetchEmptyReason = "no_active_providers" | "providers_throttled" | "no_candidates" | "no_resolved_fields";
+
+export interface MetadataFetchDiagnostics {
+  reason: MetadataFetchEmptyReason | null;
+  activeProviders: MetadataProviderKey[];
+  fieldRuleProviders: MetadataProviderKey[];
+  disabledFieldRuleProviders: MetadataProviderKey[];
+  enabledUnreferencedProviders: MetadataProviderKey[];
+  throttledProviders: MetadataProviderKey[];
+  candidateProviders: MetadataProviderKey[];
+  candidateCount: number;
+  resolvedFieldCount: number;
 }
 
 export interface ProviderThrottleRuntimeState {

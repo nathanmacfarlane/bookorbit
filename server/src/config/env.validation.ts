@@ -32,6 +32,10 @@ const envSchema = z.object({
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
   SETUP_BOOTSTRAP_TOKEN: z.string().optional(),
   APP_DATA_PATH: z.string().default('/data'),
+  BOOK_DOCK_PATH: z
+    .string()
+    .transform((val) => val.trim())
+    .optional(),
   FILE_WRITE_DEBOUNCE_MS: z.coerce.number().int().positive().optional(),
   FILE_WRITE_MAX_CONCURRENT_WRITES: z.coerce.number().int().positive().optional(),
   CLIENT_URL: z.string().url().optional(),
@@ -54,6 +58,18 @@ const envSchema = z.object({
     .refine((val) => ['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(val), {
       message: 'CSP_ALLOW_CLOUDFLARE_INSIGHTS must be one of true/false/1/0/yes/no/on/off',
     })
+    .optional(),
+  KOBO_CLOUDSCRAPER_PYTHON: z
+    .string()
+    .transform((val) => val.trim())
+    .optional(),
+  GITHUB_RELEASES_REPO: z
+    .string()
+    .transform((val) => val.trim())
+    .optional(),
+  GITHUB_RELEASES_TOKEN: z
+    .string()
+    .transform((val) => val.trim())
     .optional(),
 });
 

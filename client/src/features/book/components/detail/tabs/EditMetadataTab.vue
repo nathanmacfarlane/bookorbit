@@ -1,18 +1,35 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { Check, ChevronDown, HardDriveUpload, Loader2, Lock, LockOpen, RefreshCw, Sparkles, Star, X } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import {
+  Check,
+  ChevronDown,
+  FileCheck,
+  HardDriveDownload,
+  HardDriveUpload,
+  Loader2,
+  Lock,
+  LockOpen,
+  RefreshCw,
+  Sparkles,
+  Star,
+  X,
+} from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
-import type { BookDetail, BookMetadataLockField } from '@bookorbit/types'
-import { FORMAT_TO_GROUP } from '@bookorbit/types'
+import type { BookDetail, BookMetadataLockField, WriteResult } from '@bookorbit/types'
+import { BOOK_FILE_WRITE_FIELD_LABELS, FORMAT_TO_GROUP } from '@bookorbit/types'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import ChipInput from '@/components/ui/ChipInput.vue'
 import CoverEditorPanel from './CoverEditorPanel.vue'
 import MetadataSearchDrawer from './MetadataSearchDrawer.vue'
 import MetadataFieldLabel from './MetadataFieldLabel.vue'
+import SeriesMembershipEditor from './SeriesMembershipEditor.vue'
+import WriteAndRenameResultPanel from '../WriteAndRenameResultPanel.vue'
 import type { MetadataPatch } from '../../../composables/useMetadataDiff'
-import { useMetadataEditor } from '../../../composables/useMetadataEditor'
+import { type EditableSeriesMembership, useMetadataEditor } from '../../../composables/useMetadataEditor'
 import { type MetadataRefreshPreview, useRefreshMetadata } from '../../../composables/useRefreshMetadata'
 import { type FileMetadata, useFileMetadata } from '../../../composables/useFileMetadata'
+import { useWriteAndRename } from '../../../composables/useWriteAndRename'
 import { useMetadataLocks } from '../../../composables/useMetadataLocks'
 import { useAuthorSearch } from '../../../composables/useAuthorSearch'
 import { useNarratorSearch } from '../../../composables/useNarratorSearch'
@@ -20,12 +37,17 @@ import { useGenreSearch, useTagSearch } from '../../../composables/useTagSearch'
 import { usePublisherSearch, useSeriesNameSearch, useLanguageSearch } from '../../../composables/useMetadataFieldSearch'
 import InputWithSuggestions from '@/components/ui/InputWithSuggestions.vue'
 import { RATING_STARS, getRatingStarClass } from '@/features/book/lib/rating-stars'
+import { buildFileMetadataPatch } from '@/features/book/lib/file-metadata-patch'
+import { metadataRefreshEmptyMessage } from '@/features/book/lib/metadata-refresh-feedback'
+
+const AUTO_FILL_EMPTY_TOAST_DURATION_MS = 10_000
 
 const props = defineProps<{ book: BookDetail }>()
 const emit = defineEmits<{
   saved: [BookDetail]
   locksChanged: [BookMetadataLockField[]]
   coverChanged: ['extracted' | 'custom' | null]
+  fileRenamed: []
 }>()
 
 const DIRECT_PATCH_FIELDS = [
@@ -49,7 +71,11 @@ const DIRECT_PATCH_FIELDS = [
   'openLibraryId',
   'itunesId',
   'audibleId',
+  'koboId',
   'comicvineId',
+  'ranobedbId',
+  'lubimyczytacId',
+  'aladinId',
 ] as const
 
 const COMIC_FIELD_MAP = {
@@ -69,6 +95,41 @@ const COMIC_FIELD_MAP = {
 const primaryFile = computed(() => props.book.files.find((f) => f.role === 'primary') ?? props.book.files[0] ?? null)
 const isPrimaryAudio = computed(() => primaryFile.value?.format != null && FORMAT_TO_GROUP[primaryFile.value.format] === 'audio')
 const isPrimaryComic = computed(() => primaryFile.value?.format != null && FORMAT_TO_GROUP[primaryFile.value.format] === 'cbx')
+const fileWriteStatus = computed(() => props.book.fileWriteStatus ?? null)
+const fileWriteEnabledForBook = computed(() => fileWriteStatus.value?.enabled === true)
+const fileWriteWritableFormats = computed(() => fileWriteStatus.value?.writableFormats ?? [])
+const fileWriteFormatLabels = computed(() => fileWriteWritableFormats.value.map((format) => format.toUpperCase()))
+const fileWriteFieldLabels = computed(() => (fileWriteStatus.value?.writableFields ?? []).map((field) => BOOK_FILE_WRITE_FIELD_LABELS[field]))
+const fileWriteFieldCountLabel = computed(() => `${fileWriteFieldLabels.value.length} field${fileWriteFieldLabels.value.length === 1 ? '' : 's'}`)
+const fileWriteTargetSummary = computed(() => {
+  const formats = fileWriteWritableFormats.value
+  if (formats.length === 0) return 'book files'
+  return `${formatWritableFormatList(formats)} files`
+})
+const fileWriteManualDisabledReasonLabel = computed(() => {
+  if (!primaryFile.value) return 'No primary file available'
+  switch (fileWriteStatus.value?.reason) {
+    case 'no_primary_file':
+      return 'No primary file available'
+    case 'format_not_supported':
+      return 'This file format does not support write-back'
+    case 'format_disabled':
+      return 'Write-back is disabled for this format'
+    case 'file_exceeds_size_limit':
+      return 'This file exceeds the write-back size limit'
+    default:
+      return null
+  }
+})
+const fileWriteManualTooltip = computed(() => {
+  if (writingAndRenaming.value) return 'Writing...'
+  if (saving.value) return 'Save in progress'
+  if (fileWriteManualDisabledReasonLabel.value) return fileWriteManualDisabledReasonLabel.value
+  if (fileWriteStatus.value?.reason === 'library_disabled') {
+    return 'Write metadata to file and rename now; automatic write-back is disabled for this library'
+  }
+  return `Write ${fileWriteFieldCountLabel.value} to ${fileWriteTargetSummary.value} and rename if pattern is set`
+})
 const comicSectionOpen = ref(true)
 
 const { form, saving, error, isDirty, load, reset, save } = useMetadataEditor()
@@ -77,13 +138,17 @@ const {
   updating: updatingLocks,
   error: lockError,
   areAllLocked,
+  locksDirty,
   load: loadLocks,
+  reset: resetLocks,
+  markPersisted: markLocksPersisted,
   isLocked,
   isUpdating: isUpdatingLock,
+  replace: replaceLocks,
   toggle,
   lockAll,
   unlockAll,
-} = useMetadataLocks()
+} = useMetadataLocks({ deferred: true })
 const { search: searchAuthors } = useAuthorSearch()
 const { search: searchNarrators } = useNarratorSearch()
 const { search: searchGenres } = useGenreSearch()
@@ -105,7 +170,11 @@ const providerIdFields = [
   { field: 'openLibraryId' as const, label: 'OpenLibrary' },
   { field: 'itunesId' as const, label: 'iTunes' },
   { field: 'audibleId' as const, label: 'Audible' },
+  { field: 'koboId' as const, label: 'Kobo' },
   { field: 'comicvineId' as const, label: 'ComicVine' },
+  { field: 'ranobedbId' as const, label: 'RanobeDB' },
+  { field: 'lubimyczytacId' as const, label: 'LubimyCzytac' },
+  { field: 'aladinId' as const, label: 'Aladin' },
 ]
 
 function setIntField(field: 'publishedYear' | 'pageCount' | 'durationSeconds', e: Event) {
@@ -115,16 +184,6 @@ function setIntField(field: 'publishedYear' | 'pageCount' | 'durationSeconds', e
     return
   }
   const n = parseInt(val, 10)
-  form[field] = isNaN(n) ? null : n
-}
-
-function setFloatField(field: 'seriesIndex', e: Event) {
-  const val = (e.target as HTMLInputElement).value
-  if (val === '') {
-    form[field] = null
-    return
-  }
-  const n = parseFloat(val)
   form[field] = isNaN(n) ? null : n
 }
 
@@ -139,14 +198,27 @@ watch(
 
 const combinedError = computed(() => lockError.value ?? error.value)
 const hasLockedFields = computed(() => lockedFields.value.length > 0)
+const hasPendingChanges = computed(() => isDirty.value || locksDirty.value)
+const isSeriesLocked = computed(() => isLocked('seriesName') || isLocked('seriesIndex'))
 
 async function submit() {
   if (coverPanel.value?.hasPending) {
     const ok = await coverPanel.value.confirm()
     if (ok) emit('coverChanged', 'custom')
   }
-  const updated = await save(props.book.id)
-  if (updated) emit('saved', updated)
+  const locksChanged = locksDirty.value
+  const result = await save(props.book.id, lockedFields.value)
+  if (result) {
+    markLocksPersisted(result.book.lockedFields)
+    emit('saved', result.book)
+    if (locksChanged) emit('locksChanged', result.book.lockedFields)
+    showSaveResultToast(result.write, result.libraryAutoWriteEnabled)
+  }
+}
+
+function handleReset() {
+  reset()
+  resetLocks()
 }
 
 const hoverRating = ref<number | null>(null)
@@ -160,6 +232,13 @@ function clearRating() {
   form.rating = null
 }
 
+function formatWritableFormatList(formats: string[]): string {
+  const labels = formats.map((format) => format.toUpperCase())
+  if (labels.length <= 1) return labels[0] ?? ''
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`
+  return `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`
+}
+
 function toggleComicSection() {
   comicSectionOpen.value = !comicSectionOpen.value
 }
@@ -170,8 +249,54 @@ function trackLockedField(field: BookMetadataLockField, skippedFields: BookMetad
   }
 }
 
+function normalizeSeriesIndex(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number.parseFloat(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function setSeriesMemberships(memberships: EditableSeriesMembership[]) {
+  form.seriesMemberships = memberships
+  const primary = memberships.find((membership) => membership.seriesName.trim())
+  form.seriesName = primary?.seriesName.trim() || null
+  form.seriesIndex = primary?.seriesIndex ?? null
+}
+
+function handleSeriesMembershipsUpdate(memberships: EditableSeriesMembership[]) {
+  setSeriesMemberships(memberships)
+}
+
+function applyPrimarySeriesPatch(field: 'seriesName' | 'seriesIndex', value: unknown, skippedFields: BookMetadataLockField[]): boolean {
+  if (isSeriesLocked.value) {
+    if (isLocked('seriesName')) trackLockedField('seriesName', skippedFields)
+    if (isLocked('seriesIndex')) trackLockedField('seriesIndex', skippedFields)
+    return false
+  }
+
+  const next = [...form.seriesMemberships]
+  const primary = next[0] ?? { seriesName: form.seriesName ?? '', seriesIndex: form.seriesIndex ?? null }
+  const patched =
+    field === 'seriesName'
+      ? { ...primary, seriesName: typeof value === 'string' ? value : value == null ? '' : String(value) }
+      : { ...primary, seriesIndex: normalizeSeriesIndex(value) }
+
+  if (next.length > 0) {
+    next[0] = patched
+  } else {
+    next.push(patched)
+  }
+  setSeriesMemberships(next)
+  return true
+}
+
 function applyDirectPatchField(field: (typeof DIRECT_PATCH_FIELDS)[number], value: unknown, skippedFields: BookMetadataLockField[]): boolean {
   if (value === undefined) return false
+  if (field === 'seriesName' || field === 'seriesIndex') {
+    return applyPrimarySeriesPatch(field, value, skippedFields)
+  }
   if (isLocked(field)) {
     trackLockedField(field, skippedFields)
     return false
@@ -263,6 +388,58 @@ function handleApply({ formPatch, coverUrl }: { formPatch: MetadataPatch; coverU
 
 const { refreshing: autoFilling, previewRefresh } = useRefreshMetadata()
 const { loading: loadingFromFile, loadFromFile } = useFileMetadata()
+const {
+  loading: writingAndRenaming,
+  result: writeAndRenameResult,
+  error: writeAndRenameError,
+  writeAndRename,
+  dismiss: dismissWriteAndRenameResult,
+} = useWriteAndRename()
+let dismissTimer: ReturnType<typeof setTimeout> | null = null
+
+function pluralizeField(count: number): string {
+  return `${count} field${count === 1 ? '' : 's'}`
+}
+
+function truncateReason(reason: string | null | undefined): string {
+  if (!reason) return ''
+  return reason.length > 140 ? `${reason.slice(0, 137)}...` : reason
+}
+
+function showWriteResultToast(result: Pick<WriteResult, 'status' | 'fieldsWritten' | 'reason'>): void {
+  if (result.status === 'success') {
+    toast.success(`Wrote ${pluralizeField(result.fieldsWritten.length)} to file`)
+    return
+  }
+
+  const reason = truncateReason(result.reason)
+  if (result.status === 'failed') {
+    toast.error(reason ? `File write failed: ${reason}` : 'File write failed')
+    return
+  }
+
+  toast.info(reason ? `File write skipped: ${reason}` : 'File write skipped')
+}
+
+function showSaveResultToast(write: WriteResult | null, libraryAutoWriteEnabled: boolean): void {
+  if (!write || (!libraryAutoWriteEnabled && write.status === 'skipped')) {
+    toast.success('Metadata saved')
+    return
+  }
+
+  if (write.status === 'success') {
+    toast.success('Metadata written to file')
+    return
+  }
+
+  const reason = truncateReason(write.reason)
+  if (write.status === 'failed') {
+    toast.error(reason ? `Metadata saved, but file write failed: ${reason}` : 'Metadata saved, but file write failed')
+    return
+  }
+
+  toast.info(reason ? `Metadata saved, file write skipped: ${reason}` : 'Metadata saved, file write skipped')
+}
 
 function buildPreviewPatch(preview: MetadataRefreshPreview): MetadataPatch {
   return {
@@ -284,7 +461,11 @@ function buildPreviewPatch(preview: MetadataRefreshPreview): MetadataPatch {
     openLibraryId: preview.openLibraryId,
     itunesId: preview.itunesId,
     audibleId: preview.audibleId,
+    koboId: preview.koboId,
     comicvineId: preview.comicvineId,
+    ranobedbId: preview.ranobedbId,
+    lubimyczytacId: preview.lubimyczytacId,
+    aladinId: preview.aladinId,
     comicMetadata: preview.comicMetadata,
     narrators: preview.audioMetadata?.narrators,
     durationSeconds: preview.audioMetadata?.durationSeconds ?? undefined,
@@ -293,11 +474,12 @@ function buildPreviewPatch(preview: MetadataRefreshPreview): MetadataPatch {
 }
 
 async function autoFill() {
-  const preview = await previewRefresh(props.book.id)
-  if (!preview) return
+  const result = await previewRefresh(props.book.id)
+  if (!result) return
 
+  const preview = result.metadata
   if (Object.keys(preview).length === 0) {
-    toast.info('No new metadata found')
+    toast.info(metadataRefreshEmptyMessage(result.diagnostics, props.book), { closeButton: true, duration: AUTO_FILL_EMPTY_TOAST_DURATION_MS })
     return
   }
 
@@ -306,41 +488,8 @@ async function autoFill() {
 }
 
 function applyFileMetadataToForm(meta: FileMetadata): number {
-  let count = 0
-  const directFields = [
-    'title',
-    'subtitle',
-    'description',
-    'publisher',
-    'publishedYear',
-    'language',
-    'pageCount',
-    'seriesName',
-    'seriesIndex',
-    'isbn10',
-    'isbn13',
-    'authors',
-    'genres',
-  ] as const
-  for (const field of directFields) {
-    if (meta[field] !== undefined) {
-      form[field] = meta[field] as never
-      count++
-    }
-  }
-  if (meta.comicMetadata) {
-    for (const [comicKey, formKey] of Object.entries(COMIC_FIELD_MAP) as [
-      keyof typeof COMIC_FIELD_MAP,
-      (typeof COMIC_FIELD_MAP)[keyof typeof COMIC_FIELD_MAP],
-    ][]) {
-      const value = meta.comicMetadata[comicKey]
-      if (value !== undefined) {
-        form[formKey] = value as never
-        count++
-      }
-    }
-  }
-  return count
+  const { updatedCount } = applyPatchToForm(buildFileMetadataPatch(meta), undefined)
+  return updatedCount
 }
 
 async function handleLoadFromFile() {
@@ -353,9 +502,43 @@ async function handleLoadFromFile() {
   toast.info(count > 0 ? `Loaded ${count} field${count === 1 ? '' : 's'} from file` : 'No metadata found in file')
 }
 
+async function handleWriteAndRename() {
+  if (dismissTimer !== null) {
+    clearTimeout(dismissTimer)
+    dismissTimer = null
+  }
+  const res = await writeAndRename(props.book.id)
+  if (!res) return
+  showWriteResultToast(res.write)
+
+  if (res.rename.status === 'success') emit('fileRenamed')
+
+  const isFullSuccess =
+    res.write.status === 'success' && (res.rename.status === 'success' || (res.rename.status === 'skipped' && res.rename.reason === 'path unchanged'))
+  const hasWarning = !res.libraryAutoWriteEnabled || !res.libraryAutoRenameEnabled
+
+  if (isFullSuccess && !hasWarning) {
+    dismissTimer = setTimeout(() => {
+      dismissWriteAndRenameResult()
+      dismissTimer = null
+    }, 4000)
+  }
+}
+
+onBeforeUnmount(() => {
+  if (dismissTimer !== null) clearTimeout(dismissTimer)
+})
+
 async function handleLockToggle(field: BookMetadataLockField) {
-  const updated = await toggle(props.book.id, field)
-  if (updated) emit('locksChanged', updated.lockedFields)
+  await toggle(props.book.id, field)
+}
+
+async function handleSeriesLockToggle() {
+  const seriesFields: BookMetadataLockField[] = ['seriesName', 'seriesIndex']
+  const next = isSeriesLocked.value
+    ? lockedFields.value.filter((field) => !seriesFields.includes(field))
+    : [...new Set([...lockedFields.value, ...seriesFields])]
+  await replaceLocks(props.book.id, next, 'seriesName')
 }
 
 function handleCoverLockToggle() {
@@ -363,13 +546,11 @@ function handleCoverLockToggle() {
 }
 
 async function handleLockAll() {
-  const updated = await lockAll(props.book.id)
-  if (updated) emit('locksChanged', updated.lockedFields)
+  await lockAll(props.book.id)
 }
 
 async function handleUnlockAll() {
-  const updated = await unlockAll(props.book.id)
-  if (updated) emit('locksChanged', updated.lockedFields)
+  await unlockAll(props.book.id)
 }
 
 function handleCoverChanged(source: 'extracted' | 'custom' | null) {
@@ -380,7 +561,7 @@ function handleCoverChanged(source: 'extracted' | 'custom' | null) {
 <template>
   <div class="flex flex-col gap-3 sm:gap-4 lg:flex-row lg:items-start">
     <!-- Left: Cover panel -->
-    <div class="w-full pb-3 border-b border-border lg:border-b-0 lg:pb-0 lg:w-48 lg:shrink-0 lg:sticky lg:top-6">
+    <div class="w-full pb-3 border-b border-border lg:border-b-0 lg:pb-0 lg:w-48 lg:shrink-0 lg:sticky lg:top-0.5">
       <CoverEditorPanel
         ref="coverPanel"
         :book="props.book"
@@ -391,12 +572,14 @@ function handleCoverChanged(source: 'extracted' | 'custom' | null) {
     </div>
 
     <!-- Right: Form -->
-    <div class="flex-1 min-w-0 space-y-2.5 sm:space-y-3.5">
+    <div class="flex-1 min-w-0 space-y-2.5 pb-[calc(5rem+env(safe-area-inset-bottom))] sm:space-y-3.5 lg:pb-0">
       <!-- Action bar -->
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 min-h-8">
         <p v-if="combinedError" class="text-sm text-destructive">{{ combinedError }}</p>
         <span v-else class="hidden sm:inline" />
-        <div class="flex items-center justify-center sm:justify-start gap-2 overflow-x-auto no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0 py-0.5">
+        <div
+          class="flex items-center justify-start gap-2 overflow-x-auto sm:flex-wrap sm:overflow-visible no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0 py-0.5"
+        >
           <Tooltip>
             <TooltipTrigger as-child>
               <button
@@ -414,6 +597,21 @@ function handleCoverChanged(source: 'extracted' | 'custom' | null) {
             }}</TooltipContent>
           </Tooltip>
 
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <button
+                class="flex-none flex items-center gap-1.5 h-8 px-2.5 sm:px-3 rounded-lg border border-input bg-background text-sm hover:bg-muted transition-colors disabled:opacity-40"
+                :disabled="writingAndRenaming || saving || fileWriteManualDisabledReasonLabel !== null"
+                @click="handleWriteAndRename"
+              >
+                <Loader2 v-if="writingAndRenaming" class="size-3.5 animate-spin" />
+                <HardDriveDownload v-else class="size-3.5" />
+                <span class="hidden sm:inline">Write to file</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{{ fileWriteManualTooltip }}</TooltipContent>
+          </Tooltip>
+
           <div class="flex-none w-px h-4 bg-border mx-0.5" />
 
           <button
@@ -421,8 +619,7 @@ function handleCoverChanged(source: 'extracted' | 'custom' | null) {
             @click="searchOpen = true"
           >
             <Sparkles class="size-3.5" />
-            <span class="lg:hidden">Search</span>
-            <span class="hidden lg:inline">Search online</span>
+            <span class="hidden sm:inline">Search</span>
           </button>
 
           <Tooltip>
@@ -434,7 +631,7 @@ function handleCoverChanged(source: 'extracted' | 'custom' | null) {
               >
                 <Loader2 v-if="autoFilling" class="size-3.5 animate-spin" />
                 <RefreshCw v-else class="size-3.5" />
-                Auto-fill
+                <span class="hidden sm:inline">Auto-fill</span>
               </button>
             </TooltipTrigger>
             <TooltipContent>{{
@@ -472,27 +669,102 @@ function handleCoverChanged(source: 'extracted' | 'custom' | null) {
             <TooltipContent>Unlock all fields</TooltipContent>
           </Tooltip>
 
-          <div class="hidden lg:flex flex-none w-px h-4 bg-border mx-0.5" />
+          <div class="flex-none w-px h-4 bg-border mx-0.5" />
 
           <button
-            class="flex items-center gap-1.5 h-8 px-2.5 sm:px-3 rounded-lg border border-input bg-background text-sm hover:bg-muted transition-colors disabled:opacity-40"
-            :disabled="!isDirty || saving"
-            @click="reset"
+            class="flex items-center justify-center h-8 px-2.5 rounded-lg border border-input bg-background text-sm hover:bg-muted transition-colors disabled:opacity-40"
+            title="Cancel"
+            aria-label="Cancel"
+            :disabled="!hasPendingChanges || saving || writingAndRenaming"
+            @click="handleReset"
           >
             <X class="size-3.5" />
-            Cancel
           </button>
           <button
             class="flex items-center gap-1.5 h-8 px-2.5 sm:px-3 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-40"
-            :disabled="!isDirty || saving"
+            :disabled="!hasPendingChanges || saving || writingAndRenaming"
             @click="submit"
           >
             <Loader2 v-if="saving" class="size-3.5 animate-spin" />
             <Check v-else class="size-3.5" />
-            {{ saving ? 'Saving...' : 'Save' }}
+            <span class="hidden sm:inline">{{ saving ? 'Saving...' : 'Save' }}</span>
           </button>
+          <Popover v-if="fileWriteEnabledForBook">
+            <PopoverTrigger as-child>
+              <button
+                type="button"
+                class="flex-none inline-flex size-8 items-center justify-center rounded-lg border border-border bg-muted/40 text-muted-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                aria-label="File write-back details"
+              >
+                <FileCheck class="size-3.5 text-primary" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="end" class="w-80 max-w-[calc(100vw-2rem)] p-3">
+              <div class="space-y-3">
+                <div class="flex items-start gap-2.5">
+                  <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <FileCheck class="size-4" />
+                  </span>
+                  <div class="min-w-0 flex-1 space-y-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <p class="text-sm font-semibold text-foreground">File write-back</p>
+                      <span class="rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-primary">
+                        Enabled
+                      </span>
+                    </div>
+                    <p class="text-xs leading-5 text-muted-foreground">'Save' writes metadata to {{ fileWriteTargetSummary }}</p>
+                  </div>
+                </div>
+
+                <div class="space-y-2 rounded-lg border border-border bg-muted/30 p-2.5 text-xs">
+                  <div class="flex items-start justify-between gap-3">
+                    <span class="shrink-0 text-muted-foreground">Formats</span>
+                    <div v-if="fileWriteFormatLabels.length > 0" class="flex min-w-0 flex-wrap justify-end gap-1">
+                      <span
+                        v-for="format in fileWriteFormatLabels"
+                        :key="format"
+                        class="rounded-md border border-border bg-background px-1.5 py-0.5 font-medium text-foreground"
+                      >
+                        {{ format }}
+                      </span>
+                    </div>
+                    <span v-else class="text-right font-medium text-foreground">Book files</span>
+                  </div>
+                  <div class="space-y-1.5 border-t border-border/70 pt-2">
+                    <div class="flex items-center justify-between gap-3">
+                      <span class="text-muted-foreground">Supported fields</span>
+                      <span class="font-medium text-foreground">{{ fileWriteFieldCountLabel }}</span>
+                    </div>
+                    <div v-if="fileWriteFieldLabels.length > 0" class="flex max-h-28 flex-wrap gap-1 overflow-y-auto pr-1">
+                      <span
+                        v-for="field in fileWriteFieldLabels"
+                        :key="field"
+                        class="rounded-md border border-border bg-background px-1.5 py-0.5 font-medium text-foreground"
+                      >
+                        {{ field }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
+
+      <!-- Write & rename result panel -->
+      <WriteAndRenameResultPanel
+        v-if="writeAndRenameResult || writeAndRenameError"
+        :result="
+          writeAndRenameResult ?? {
+            write: { status: 'failed', fieldsWritten: [], durationMs: 0, reason: writeAndRenameError ?? 'Unknown error' },
+            rename: { status: 'skipped', durationMs: 0, reason: 'not attempted' },
+            libraryAutoWriteEnabled: true,
+            libraryAutoRenameEnabled: true,
+          }
+        "
+        @dismiss="dismissWriteAndRenameResult"
+      />
 
       <!-- Title + Subtitle -->
       <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -578,7 +850,7 @@ function handleCoverChanged(source: 'extracted' | 'custom' | null) {
           @toggle="handleLockToggle"
         >
           <div
-            class="flex h-8 items-center gap-0.5 rounded-lg border border-input bg-background px-2 py-2 pr-12"
+            class="flex h-10 items-center gap-0.5 rounded-lg border border-input bg-background px-2 py-2 pr-12"
             :class="isLocked('rating') ? 'opacity-50 cursor-not-allowed' : ''"
             @mouseleave="hoverRating = null"
           >
@@ -609,43 +881,25 @@ function handleCoverChanged(source: 'extracted' | 'custom' | null) {
         </MetadataFieldLabel>
       </div>
 
-      <!-- Series | Index | Publisher -->
-      <div class="grid grid-cols-[1fr_7rem] sm:flex sm:flex-wrap gap-3">
+      <!-- Series | Publisher -->
+      <div class="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,18rem)] gap-3">
         <MetadataFieldLabel
-          class="min-w-0 sm:flex-1 sm:min-w-35"
           label="Series"
           field="seriesName"
-          :locked="isLocked('seriesName')"
+          :locked="isSeriesLocked"
           :is-updating="isUpdatingLock"
-          @toggle="handleLockToggle"
+          multiline
+          @toggle="handleSeriesLockToggle"
         >
-          <InputWithSuggestions
-            v-model="form.seriesName"
+          <SeriesMembershipEditor
+            class="pr-10"
+            :model-value="form.seriesMemberships"
             :search-fn="searchSeriesName"
-            :disabled="isLocked('seriesName')"
-            :class="'w-full h-8 rounded-lg border border-input bg-background px-3 pr-12 text-sm outline-none focus:ring-1 focus:ring-ring transition-shadow disabled:opacity-50 disabled:cursor-not-allowed'"
+            :disabled="isSeriesLocked"
+            @update:model-value="handleSeriesMembershipsUpdate"
           />
         </MetadataFieldLabel>
         <MetadataFieldLabel
-          class="sm:w-28 sm:shrink-0"
-          label="Index"
-          field="seriesIndex"
-          :locked="isLocked('seriesIndex')"
-          :is-updating="isUpdatingLock"
-          @toggle="handleLockToggle"
-        >
-          <input
-            :value="form.seriesIndex ?? ''"
-            type="number"
-            step="0.1"
-            min="0"
-            class="w-full h-8 rounded-lg border border-input bg-background px-3 pr-12 text-sm outline-none focus:ring-1 focus:ring-ring transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
-            :disabled="isLocked('seriesIndex')"
-            @input="setFloatField('seriesIndex', $event)"
-          />
-        </MetadataFieldLabel>
-        <MetadataFieldLabel
-          class="col-span-2 sm:flex-1 sm:min-w-30"
           label="Publisher"
           field="publisher"
           :locked="isLocked('publisher')"
@@ -798,7 +1052,7 @@ function handleCoverChanged(source: 'extracted' | 'custom' | null) {
           <ChevronDown class="size-3.5 text-muted-foreground transition-transform" :class="providerIdsOpen ? 'rotate-180' : ''" />
         </button>
         <div v-if="providerIdsOpen" class="p-3">
-          <div class="grid grid-cols-2 sm:flex sm:gap-3 sm:overflow-x-auto gap-2">
+          <div class="grid grid-cols-2 sm:flex sm:gap-3 sm:overflow-x-auto gap-2 p-px">
             <div v-for="{ field, label } in providerIdFields" :key="field" class="min-w-0 sm:min-w-30 sm:flex-1">
               <MetadataFieldLabel :label="label" :field="field" :locked="isLocked(field)" :is-updating="isUpdatingLock" @toggle="handleLockToggle">
                 <input
@@ -1001,19 +1255,19 @@ function handleCoverChanged(source: 'extracted' | 'custom' | null) {
 
       <!-- Mobile: sticky Save/Cancel bar -->
       <div
-        class="lg:hidden sticky bottom-0 z-20 bg-background/95 backdrop-blur-sm border-t border-border -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 flex gap-2"
+        class="fixed inset-x-0 bottom-0 z-40 flex gap-2 border-t border-border bg-background/95 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-sm sm:px-6 lg:hidden"
       >
         <button
           class="flex items-center gap-1.5 h-9 px-4 rounded-lg border border-input bg-background text-sm hover:bg-muted transition-colors disabled:opacity-40"
-          :disabled="!isDirty || saving"
-          @click="reset"
+          :disabled="!hasPendingChanges || saving || writingAndRenaming"
+          @click="handleReset"
         >
           <X class="size-3.5" />
           Cancel
         </button>
         <button
           class="flex flex-1 items-center justify-center gap-1.5 h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-40"
-          :disabled="!isDirty || saving"
+          :disabled="!hasPendingChanges || saving || writingAndRenaming"
           @click="submit"
         >
           <Loader2 v-if="saving" class="size-3.5 animate-spin" />

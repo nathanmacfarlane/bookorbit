@@ -1,6 +1,11 @@
 import { computed, reactive, ref } from 'vue'
 import { api } from '@/lib/api'
-import { FORMAT_TO_GROUP, type BookDetail } from '@bookorbit/types'
+import { FORMAT_TO_GROUP, type BookDetail, type BookMetadataLockField, type BookMetadataSaveResult } from '@bookorbit/types'
+
+export type EditableSeriesMembership = {
+  seriesName: string
+  seriesIndex: number | null
+}
 
 const ROOT_FIELDS = [
   'title',
@@ -10,8 +15,6 @@ const ROOT_FIELDS = [
   'publishedYear',
   'language',
   'pageCount',
-  'seriesName',
-  'seriesIndex',
   'isbn10',
   'isbn13',
   'rating',
@@ -25,7 +28,11 @@ const ROOT_FIELDS = [
   'openLibraryId',
   'itunesId',
   'audibleId',
+  'koboId',
   'comicvineId',
+  'ranobedbId',
+  'lubimyczytacId',
+  'aladinId',
 ] as const
 
 const COMIC_FIELDS = {
@@ -48,6 +55,32 @@ const AUDIO_FIELDS = {
   abridged: 'abridged',
 } as const
 
+function normalizePageCount(value: number | null): number | null {
+  return typeof value === 'number' && value > 0 ? value : null
+}
+
+export function normalizeSeriesMemberships(values: readonly EditableSeriesMembership[]): EditableSeriesMembership[] {
+  const seen = new Set<string>()
+  const out: EditableSeriesMembership[] = []
+  for (const value of values) {
+    const seriesName = value.seriesName.trim()
+    if (!seriesName) continue
+    const key = seriesName.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ seriesName, seriesIndex: value.seriesIndex ?? null })
+  }
+  return out
+}
+
+function seriesMembershipsFromBook(book: BookDetail): EditableSeriesMembership[] {
+  const memberships = book.seriesMemberships ?? []
+  if (memberships.length > 0) {
+    return normalizeSeriesMemberships(memberships.map((membership) => ({ seriesName: membership.seriesName, seriesIndex: membership.seriesIndex })))
+  }
+  return book.seriesName ? [{ seriesName: book.seriesName, seriesIndex: book.seriesIndex }] : []
+}
+
 export function useMetadataEditor() {
   const saving = ref(false)
   const error = ref<string | null>(null)
@@ -62,6 +95,7 @@ export function useMetadataEditor() {
     pageCount: null as number | null,
     seriesName: null as string | null,
     seriesIndex: null as number | null,
+    seriesMemberships: [] as EditableSeriesMembership[],
     isbn10: null as string | null,
     isbn13: null as string | null,
     rating: null as number | null,
@@ -78,7 +112,11 @@ export function useMetadataEditor() {
     openLibraryId: null as string | null,
     itunesId: null as string | null,
     audibleId: null as string | null,
+    koboId: null as string | null,
     comicvineId: null as string | null,
+    ranobedbId: null as string | null,
+    lubimyczytacId: null as string | null,
+    aladinId: null as string | null,
     comicIssueNumber: null as string | null,
     comicVolumeName: null as string | null,
     comicStoryArcs: [] as string[],
@@ -107,6 +145,7 @@ export function useMetadataEditor() {
     form.pageCount = book.pageCount
     form.seriesName = book.seriesName
     form.seriesIndex = book.seriesIndex
+    form.seriesMemberships = seriesMembershipsFromBook(book)
     form.isbn10 = book.isbn10
     form.isbn13 = book.isbn13
     form.rating = book.rating ?? null
@@ -123,7 +162,11 @@ export function useMetadataEditor() {
     form.openLibraryId = book.providerIds.openLibrary ?? null
     form.itunesId = book.providerIds.itunes ?? null
     form.audibleId = book.providerIds.audible ?? null
+    form.koboId = book.providerIds.kobo ?? null
     form.comicvineId = book.providerIds.comicvine ?? null
+    form.ranobedbId = book.providerIds.ranobedb ?? null
+    form.lubimyczytacId = book.providerIds.lubimyczytac ?? null
+    form.aladinId = book.providerIds.aladin ?? null
     const cm = book.comicMetadata
     form.comicIssueNumber = cm?.issueNumber ?? null
     form.comicVolumeName = cm?.volumeName ?? null
@@ -152,9 +195,16 @@ export function useMetadataEditor() {
     const payload: Record<string, unknown> = {}
 
     for (const field of ROOT_FIELDS) {
-      if (JSON.stringify(form[field]) !== JSON.stringify(previous[field])) {
-        payload[field] = form[field]
+      const current = field === 'pageCount' ? normalizePageCount(form.pageCount) : form[field]
+      if (JSON.stringify(current) !== JSON.stringify(previous[field])) {
+        payload[field] = current
       }
+    }
+
+    const currentSeriesMemberships = normalizeSeriesMemberships(form.seriesMemberships)
+    const previousSeriesMemberships = normalizeSeriesMemberships(previous.seriesMemberships)
+    if (JSON.stringify(currentSeriesMemberships) !== JSON.stringify(previousSeriesMemberships)) {
+      payload.seriesMemberships = currentSeriesMemberships
     }
 
     const comicMetadata: Record<string, unknown> = {}
@@ -181,17 +231,26 @@ export function useMetadataEditor() {
     return payload
   }
 
-  async function save(bookId: number): Promise<BookDetail | null> {
+  function normalizeSaveResult(data: BookDetail | BookMetadataSaveResult): BookMetadataSaveResult {
+    if ('book' in data && 'libraryAutoWriteEnabled' in data) {
+      return data
+    }
+    return { book: data, write: null, libraryAutoWriteEnabled: false }
+  }
+
+  async function save(bookId: number, lockedFields: readonly BookMetadataLockField[]): Promise<BookMetadataSaveResult | null> {
     saving.value = true
     error.value = null
     try {
-      const res = await api(`/api/v1/books/${bookId}/metadata`, {
+      const metadata = buildPayload()
+      const shouldSyncFileWrite = Object.keys(metadata).length > 0
+      const res = await api(`/api/v1/books/${bookId}/metadata-and-locks${shouldSyncFileWrite ? '?syncFileWrite=true' : ''}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildPayload()),
+        body: JSON.stringify({ metadata, lockedFields }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const updated: BookDetail = await res.json()
+      const updated = normalizeSaveResult((await res.json()) as BookDetail | BookMetadataSaveResult)
       snapshot.value = JSON.stringify(form)
       return updated
     } catch (e) {

@@ -59,6 +59,21 @@ function partialCount(collection: Collection): number {
   return membershipCount(collection)
 }
 
+function justAdded(collection: Collection): boolean {
+  return changedCollectionIds.value.has(collection.id) && isFullyAdded(collection)
+}
+
+function membershipLabel(collection: Collection): string {
+  const total = props.bookIds.length
+  if (isFullyAdded(collection)) {
+    if (justAdded(collection)) return total === 1 ? 'Added' : `All ${total} added`
+    return total === 1 ? 'In this collection' : `All ${total} in this collection`
+  }
+  const partial = partialCount(collection)
+  if (partial > 0) return `${partial} of ${total} in this collection`
+  return `${collection.bookCount} book${collection.bookCount === 1 ? '' : 's'}`
+}
+
 function markCollectionChanged(collectionId: number): void {
   changedCollectionIds.value = new Set([...changedCollectionIds.value, collectionId])
 }
@@ -137,9 +152,16 @@ function handleDone() {
   emit('update:open', false)
 }
 
-function handlePointerDownOutside(e: Event) {
+function handleOutsideInteraction(e: Event) {
   const target = (e as CustomEvent).detail?.originalEvent?.target as Element | null
   if (target?.closest('[data-icon-picker-panel]')) e.preventDefault()
+}
+
+function handleFocusOut(e: FocusEvent) {
+  const related = e.relatedTarget as Element | null
+  if (related?.closest?.('[data-icon-picker-panel]')) {
+    e.stopPropagation()
+  }
 }
 </script>
 
@@ -149,7 +171,10 @@ function handlePointerDownOutside(e: Event) {
       side="bottom"
       class="max-h-[80vh] overflow-y-auto sm:inset-x-auto sm:right-auto sm:left-1/2 sm:-translate-x-1/2 sm:w-full sm:max-w-lg sm:rounded-t-lg"
       :style="keyboardHeight > 0 ? { bottom: `${keyboardHeight}px` } : undefined"
-      @pointer-down-outside="handlePointerDownOutside"
+      @pointer-down-outside="handleOutsideInteraction"
+      @focus-outside="handleOutsideInteraction"
+      @interact-outside="handleOutsideInteraction"
+      @focusout="handleFocusOut"
     >
       <SheetHeader>
         <SheetTitle class="flex items-center gap-2">
@@ -195,10 +220,8 @@ function handlePointerDownOutside(e: Event) {
             >
               <div class="flex flex-col min-w-0">
                 <span class="text-sm font-medium text-foreground truncate">{{ collection.name }}</span>
-                <span class="text-xs text-muted-foreground">
-                  <template v-if="isFullyAdded(collection)">All {{ bookIds.length }} already here</template>
-                  <template v-else-if="partialCount(collection) > 0"> {{ partialCount(collection) }} of {{ bookIds.length }} already here </template>
-                  <template v-else>{{ collection.bookCount }} book{{ collection.bookCount === 1 ? '' : 's' }}</template>
+                <span class="text-xs" :class="justAdded(collection) ? 'text-primary font-medium' : 'text-muted-foreground'">
+                  {{ membershipLabel(collection) }}
                 </span>
               </div>
               <Loader2 v-if="mutatingCollectionId === collection.id" :size="18" class="animate-spin text-muted-foreground shrink-0" />

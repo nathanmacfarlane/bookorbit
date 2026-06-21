@@ -19,6 +19,7 @@ import {
 import { validateEnv } from './config/env.validation';
 import { loggerConfig } from './common/logger.config';
 import { CommonModule } from './common/common.module';
+import { SeriesIdentityModule } from './common/series-identity.module';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { LibraryAccessGuard } from './common/guards/library-access.guard';
@@ -46,6 +47,7 @@ import { MetadataModule } from './modules/metadata/metadata.module';
 import { NarratorModule } from './modules/narrator/narrator.module';
 import { ReaderPreferencesModule } from './modules/reader-preferences/reader-preferences.module';
 import { RecommendationModule } from './modules/recommendation/recommendation.module';
+import { UserPreferencesModule } from './modules/user-preferences/user-preferences.module';
 import { ScannerModule } from './modules/scanner/scanner.module';
 import { SeedModule } from './modules/seed/seed.module';
 import { EmailModule } from './modules/email/email.module';
@@ -68,6 +70,7 @@ import { EntityManagerModule } from './modules/entity-manager/entity-manager.mod
 import { FontModule } from './modules/font/font.module';
 import { KoreaderModule } from './modules/koreader/koreader.module';
 import { AppInfoModule } from './modules/app-info/app-info.module';
+import { ReleaseNotesModule } from './modules/release-notes/release-notes.module';
 import { AchievementModule } from './modules/achievement/achievement.module';
 import { HardcoverModule } from './modules/hardcover/hardcover.module';
 import { ZlibModule } from './modules/zlib/zlib.module';
@@ -92,6 +95,7 @@ import { ZlibModule } from './modules/zlib/zlib.module';
       ],
     }),
     DbModule,
+    SeriesIdentityModule,
     CommonModule,
     SeedModule,
     AuthModule,
@@ -121,6 +125,7 @@ import { ZlibModule } from './modules/zlib/zlib.module';
     HealthModule,
     CbzModule,
     ReaderPreferencesModule,
+    UserPreferencesModule,
     EpubModule,
     BookDockModule,
     EmailModule,
@@ -137,6 +142,7 @@ import { ZlibModule } from './modules/zlib/zlib.module';
     FontModule,
     KoreaderModule,
     AppInfoModule,
+    ReleaseNotesModule,
     AchievementModule,
     HardcoverModule,
     ZlibModule,

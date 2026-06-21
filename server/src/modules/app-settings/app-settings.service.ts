@@ -51,6 +51,10 @@ export class AppSettingsService {
     return row?.value ?? null;
   }
 
+  async setValue(key: string, value: string): Promise<void> {
+    await this.repo.upsert(key, value);
+  }
+
   async update(key: string, value: string) {
     const setting = await this.repo.updateByKey(key, value);
     if (!setting) throw new NotFoundException(`Setting '${key}' not found`);
@@ -237,15 +241,6 @@ export class AppSettingsService {
   async isUpdateCheckEnabled(): Promise<boolean> {
     const row = await this.repo.findByKey(APP_SETTING_KEYS.UPDATE_CHECK_ENABLED);
     return parseBooleanSetting(row?.value, true);
-  }
-
-  async isHardcoverEnabled(): Promise<boolean> {
-    const row = await this.repo.findByKey(APP_SETTING_KEYS.HARDCOVER_ENABLED);
-    return parseBooleanSetting(row?.value, false);
-  }
-
-  async setHardcoverEnabled(enabled: boolean): Promise<void> {
-    await this.repo.upsert(APP_SETTING_KEYS.HARDCOVER_ENABLED, String(enabled));
   }
 }
 

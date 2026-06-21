@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { BookOpen, ExternalLink, Folder, FolderPlus, Headphones, Pencil, Star, Trash2, X } from 'lucide-vue-next'
+import { BookOpen, ExternalLink, Eye, Folder, FolderPlus, Headphones, Pencil, Star, Trash2, X } from 'lucide-vue-next'
 import { usePermissions } from '@/features/auth/composables/usePermissions'
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -9,15 +9,17 @@ import { DialogRoot, DialogContent, DialogPortal, DialogOverlay, DialogClose, Di
 import { formatBytes } from '@/lib/formatting'
 import { getProviderColor } from '@/lib/provider-colors'
 import { providerIconPath } from '@/features/book/lib/provider-icons'
+import { lubimyczytacBookUrl } from '@/features/book/lib/provider-links'
 import { useBookDetail } from '../composables/useBookDetail'
 import { useCoverVersions } from '../composables/useCoverVersions'
-import { bookCoverStyle } from '../lib/book-cover'
-import BookCoverPlaceholder from './BookCoverPlaceholder.vue'
 import { getFormatColor } from '../lib/format-colors'
 import { FORMAT_TO_GROUP } from '@bookorbit/types'
 import { COVER_ASPECT_RATIO_KEY, DEFAULT_COVER_ASPECT_RATIO } from '../lib/cover-aspect-ratio'
+import { useDisplaySettings } from '@/composables/useDisplaySettings'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useSafeHtml } from '@/features/book/composables/useSafeHtml'
+import BookCoverArtwork from './BookCoverArtwork.vue'
+import BookCoverSurface from './BookCoverSurface.vue'
 
 const props = defineProps<{ bookId: number | null; open: boolean }>()
 const { hasPermission } = usePermissions()
@@ -39,6 +41,7 @@ const { detail, loading, fetch } = useBookDetail()
 
 const coverLoaded = ref(false)
 const coverFailed = ref(false)
+const coverImageRatio = ref<number | null>(null)
 const providerIconErrors = ref<Record<string, boolean>>({})
 const descriptionExpanded = ref(false)
 const genresExpanded = ref(false)
@@ -50,6 +53,7 @@ watch(
     if (id !== null) {
       coverLoaded.value = false
       coverFailed.value = false
+      coverImageRatio.value = null
       descriptionExpanded.value = false
       genresExpanded.value = false
       providerIconErrors.value = {}
@@ -60,11 +64,10 @@ watch(
 )
 
 const { coverUrl } = useCoverVersions()
-const coverSrc = computed(() => (detail.value ? coverUrl(detail.value.id, 'cover') : null))
+const coverSrc = computed(() => (detail.value ? coverUrl(detail.value.id, 'cover', detail.value.updatedAt ?? detail.value.addedAt) : null))
 
 const coverSeed = computed(() => (detail.value ? (detail.value.title ?? detail.value.folderPath.split('/').pop() ?? String(detail.value.id)) : ''))
 const coverPlaceholderTitle = computed(() => (detail.value ? (detail.value.title ?? detail.value.folderPath.split('/').pop() ?? null) : null))
-const coverStyle = computed(() => (detail.value ? bookCoverStyle(coverSeed.value) : {}))
 
 const seriesLine = computed(() => {
   if (!detail.value?.seriesName) return null
@@ -133,15 +136,57 @@ const providerLinks = computed<ProviderLink[]>(() => {
       fallback: '',
     })
   }
+  if (ids.ranobedb) {
+    out.push({
+      key: 'ranobedb',
+      label: 'RanobeDB',
+      url: `https://ranobedb.org/book/${ids.ranobedb}`,
+      iconUrl: providerIconPath('ranobedb'),
+      fallback: 'RN',
+    })
+  }
+  if (ids.lubimyczytac) {
+    out.push({
+      key: 'lubimyczytac',
+      label: 'LubimyCzytac',
+      url: lubimyczytacBookUrl(ids.lubimyczytac),
+      iconUrl: providerIconPath('lubimyczytac'),
+      fallback: 'LC',
+    })
+  }
+  if (ids.aladin) {
+    out.push({
+      key: 'aladin',
+      label: 'Aladin',
+      url: `https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=${ids.aladin}`,
+      iconUrl: providerIconPath('aladin'),
+      fallback: '알',
+    })
+  }
   return out
 })
 
 const safeDescription = useSafeHtml(() => detail.value?.description)
 
 const coverAspectRatio = inject(COVER_ASPECT_RATIO_KEY, ref(DEFAULT_COVER_ASPECT_RATIO))
+const { bookCoverDisplayMode } = useDisplaySettings()
+const quickViewCoverAspectRatio = computed(() => {
+  if (
+    bookCoverDisplayMode.value !== 'natural-bottom' ||
+    detail.value?.coverSource == null ||
+    !coverLoaded.value ||
+    coverFailed.value ||
+    !coverImageRatio.value
+  ) {
+    return coverAspectRatio.value
+  }
+
+  return `${coverImageRatio.value} / 1`
+})
 
 const primaryFile = computed(() => detail.value?.files.find((f) => f.role === 'primary') ?? detail.value?.files[0] ?? null)
 const isPrimaryAudio = computed(() => primaryFile.value?.format != null && FORMAT_TO_GROUP[primaryFile.value.format] === 'audio')
+const isPrimaryComic = computed(() => primaryFile.value?.format != null && FORMAT_TO_GROUP[primaryFile.value.format] === 'cbx')
 const knownFormats = computed(() => [
   ...new Set((detail.value?.files ?? []).filter((f) => f.format && FORMAT_TO_GROUP[f.format]).map((f) => f.format!)),
 ])
@@ -163,14 +208,38 @@ function formatBadgeStyle(fmt: string) {
   }
 }
 
-function openBook() {
+function handleCoverLoad(ratio: number | null) {
+  coverLoaded.value = true
+  coverFailed.value = false
+  coverImageRatio.value = ratio
+}
+
+function handleCoverError() {
+  coverLoaded.value = false
+  coverFailed.value = true
+  coverImageRatio.value = null
+}
+
+function handleCoverClick() {
+  if (coverLoaded.value && !coverFailed.value) coverLightboxOpen.value = true
+}
+
+function openBookWithMode(mode?: 'peek') {
   if (!primaryFile.value || !detail.value) return
   router.push({
     name: 'reader',
     params: { bookId: detail.value.id, fileId: primaryFile.value.id },
-    query: { format: primaryFile.value.format ?? 'epub' },
+    query: mode === 'peek' ? { format: primaryFile.value.format ?? 'epub', mode } : { format: primaryFile.value.format ?? 'epub' },
   })
   emit('update:open', false)
+}
+
+function openBook() {
+  openBookWithMode()
+}
+
+function peekBook() {
+  openBookWithMode('peek')
 }
 
 function editMetadata() {
@@ -220,29 +289,31 @@ function handleDelete() {
 
             <div v-else-if="detail" class="flex gap-4 items-start">
               <!-- Cover -->
-              <div
-                class="w-24 shrink-0 rounded overflow-hidden shadow-md relative"
+              <BookCoverSurface
+                size="mini"
+                class="book-cover-surface--spine-fitted w-24 shrink-0 rounded overflow-hidden relative"
+                :disable-spine="isPrimaryAudio"
+                :is-comic="isPrimaryComic"
                 :class="detail.coverSource && !coverFailed ? 'cursor-zoom-in' : ''"
-                :style="[{ aspectRatio: coverAspectRatio }, !detail.coverSource || !coverLoaded || coverFailed ? coverStyle : {}]"
-                @click="coverLoaded && !coverFailed && (coverLightboxOpen = true)"
+                :style="{ aspectRatio: quickViewCoverAspectRatio }"
+                @click="handleCoverClick"
               >
-                <img
-                  v-if="detail.coverSource && !coverFailed"
-                  :src="coverSrc!"
-                  class="w-full h-full object-contain transition-opacity duration-200"
-                  :class="coverLoaded ? 'opacity-100' : 'opacity-0'"
-                  :alt="detail.title ?? ''"
-                  @load="coverLoaded = true"
-                  @error="coverFailed = true"
-                />
-                <BookCoverPlaceholder
-                  v-if="!detail.coverSource || coverFailed"
+                <BookCoverArtwork
+                  :src="coverSrc"
+                  :has-cover="detail.coverSource !== null"
                   :title="coverPlaceholderTitle"
                   :author-line="authorLine"
                   :is-audio="isPrimaryAudio"
                   :seed="coverSeed"
+                  :alt="detail.title ?? ''"
+                  :frame-aspect-ratio="quickViewCoverAspectRatio"
+                  loading="eager"
+                  :spine="!isPrimaryAudio"
+                  :is-comic="isPrimaryComic"
+                  @load="handleCoverLoad"
+                  @error="handleCoverError"
                 />
-              </div>
+              </BookCoverSurface>
 
               <!-- Info -->
               <div class="flex-1 min-w-0 pr-2">
@@ -431,6 +502,19 @@ function handleDelete() {
               <ExternalLink class="size-4" />
               <span class="hidden sm:inline">Details</span>
             </button>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <button
+                  class="flex items-center justify-center gap-1.5 h-9 px-3 rounded-md border border-input bg-background text-sm hover:bg-muted transition-colors disabled:opacity-50"
+                  :disabled="!primaryFile"
+                  aria-label="Peek"
+                  @click="peekBook"
+                >
+                  <Eye class="size-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Peek</TooltipContent>
+            </Tooltip>
             <Tooltip v-if="hasPermission('library_edit_metadata')">
               <TooltipTrigger as-child>
                 <button
@@ -482,7 +566,7 @@ function handleDelete() {
         >
           <DialogTitle class="sr-only">{{ detail?.title ? `${detail.title} cover preview` : 'Book cover preview' }}</DialogTitle>
           <DialogDescription class="sr-only">Enlarged cover image preview dialog.</DialogDescription>
-          <img v-if="detail" :src="coverSrc!" :alt="detail.title ?? ''" class="max-w-[90vw] max-h-[90vh] rounded-md shadow-2xl object-contain" />
+          <img v-if="detail" :src="coverSrc ?? ''" :alt="detail.title ?? ''" class="max-w-[90vw] max-h-[90vh] rounded-md shadow-2xl object-contain" />
           <DialogClose
             class="absolute -top-3 -right-3 p-1 rounded-full bg-background border border-border text-muted-foreground hover:text-foreground transition-colors"
           >

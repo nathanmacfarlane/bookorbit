@@ -16,7 +16,7 @@ const emit = defineEmits<{
 }>()
 
 const { coverUrl } = useCoverVersions()
-const bookCoverUrl = computed(() => coverUrl(props.book.id, 'cover'))
+const bookCoverUrl = computed(() => coverUrl(props.book.id, 'cover', props.book.updatedAt ?? props.book.addedAt))
 const searchDefaults = computed(() => ({
   title: props.book.title ?? undefined,
   author: props.book.authors[0]?.name ?? undefined,
@@ -74,7 +74,7 @@ function handleSearch(params: { title: string; author: string; isbn: string }) {
   const isAudiobook = props.book.files.some((f) => f.format != null && isAudioFormat(f.format))
   selectedCandidate.value = null
   view.value = 'search'
-  search({ ...params, bookId: props.book.id, isAudiobook })
+  search({ ...params, isAudiobook })
 }
 
 function handleSelect(candidate: MetadataCandidate) {

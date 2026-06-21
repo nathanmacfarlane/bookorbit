@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import type { BookCard, BookFileRef } from '@bookorbit/types'
 import { FORMAT_TO_GROUP } from '@bookorbit/types'
-import { bookCoverStyle } from '../lib/book-cover'
-import BookCoverPlaceholder from './BookCoverPlaceholder.vue'
+import BookCoverArtwork from './BookCoverArtwork.vue'
 import BookCoverSurface from './BookCoverSurface.vue'
 import { api } from '@/lib/api'
 import { computed, inject, ref, watch } from 'vue'
@@ -10,6 +9,7 @@ import { useRouter } from 'vue-router'
 import {
   BookOpen,
   Check,
+  Eye,
   ExternalLink,
   FolderPlus,
   Loader2,
@@ -25,11 +25,12 @@ import {
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useCoverVersions } from '../composables/useCoverVersions'
-import { coverAspectRatioValue, COVER_ASPECT_RATIO_KEY, DEFAULT_COVER_ASPECT_RATIO, fittedCoverFrameStyle } from '../lib/cover-aspect-ratio'
+import { COVER_ASPECT_RATIO_KEY, DEFAULT_COVER_ASPECT_RATIO } from '../lib/cover-aspect-ratio'
 import { useRefreshMetadata } from '../composables/useRefreshMetadata'
 import { usePermissions } from '@/features/auth/composables/usePermissions'
 import SendBookDialog from '@/features/email/components/SendBookDialog.vue'
 import { RATING_STARS, getRatingStarClass } from '@/features/book/lib/rating-stars'
+import { useDisplaySettings } from '@/composables/useDisplaySettings'
 
 const router = useRouter()
 
@@ -47,9 +48,9 @@ const emit = defineEmits<{
 }>()
 
 const { hasPermission } = usePermissions()
+const { thumbnailClickAction } = useDisplaySettings()
 const showSendDialog = ref(false)
 
-const coverStyle = computed(() => bookCoverStyle(props.book.title ?? String(props.book.id)))
 const authorLine = computed(() => props.book.authors.join(', ') || null)
 const authorQuery = computed(() => props.book.authors[0] ?? null)
 const seriesLine = computed(() => {
@@ -61,7 +62,21 @@ const seriesLine = computed(() => {
 const isMissing = computed(() => props.book.status === 'missing')
 const primaryFile = computed(() => props.book.files.find((f) => f.role === 'primary') ?? props.book.files[0] ?? null)
 const isAudiobook = computed(() => primaryFile.value?.format != null && FORMAT_TO_GROUP[primaryFile.value.format] === 'audio')
+const isComic = computed(() => primaryFile.value?.format != null && FORMAT_TO_GROUP[primaryFile.value.format] === 'cbx')
 const secondaryFiles = computed(() => props.book.files.filter((f) => f !== primaryFile.value))
+
+const uniqueSecondaryFiles = computed(() => {
+  const seenFormats = new Set<string>()
+  if (primaryFile.value?.format) seenFormats.add(primaryFile.value.format)
+
+  return secondaryFiles.value.filter((f) => {
+    const format = f.format
+    if (!format) return true
+    if (seenFormats.has(format)) return false
+    seenFormats.add(format)
+    return true
+  })
+})
 
 const metaLine = computed(() => {
   const parts: string[] = []
@@ -71,10 +86,6 @@ const metaLine = computed(() => {
 })
 
 const visibleTags = computed(() => props.book.genres.slice(0, 2))
-
-const coverLoaded = ref(false)
-const coverFailed = ref(false)
-const coverImageRatio = ref<number | null>(null)
 
 const localRating = ref<number | null>(props.book.rating)
 const hoverRating = ref<number | null>(null)
@@ -99,38 +110,45 @@ async function setRating(star: number) {
 }
 
 const { coverUrl } = useCoverVersions()
-const coverSrc = computed(() => coverUrl(props.book.id))
-
-watch(coverSrc, () => {
-  coverLoaded.value = false
-  coverFailed.value = false
-  coverImageRatio.value = null
-})
+const coverSrc = computed(() => coverUrl(props.book.id, 'thumbnail', props.book.updatedAt ?? props.book.addedAt))
 
 const { refreshing, refreshWithFeedback } = useRefreshMetadata()
 const coverAspectRatio = inject(COVER_ASPECT_RATIO_KEY, ref(DEFAULT_COVER_ASPECT_RATIO))
-const slotAspectRatio = computed(() => coverAspectRatioValue(String(coverAspectRatio.value)))
-const fittedCoverSpineStyle = computed(() => fittedCoverFrameStyle(coverImageRatio.value, slotAspectRatio.value))
 
-function handleCoverLoad(event: Event) {
-  const target = event.target as HTMLImageElement | null
-  if (target && target.naturalWidth > 0 && target.naturalHeight > 0) {
-    coverImageRatio.value = target.naturalWidth / target.naturalHeight
-  }
-  coverLoaded.value = true
-}
-
-function openFile(file: BookFileRef) {
+function openFile(file: BookFileRef, mode?: 'peek') {
   router.push({
     name: 'reader',
     params: { bookId: props.book.id, fileId: file.id },
-    query: { format: file.format ?? 'epub' },
+    query: mode === 'peek' ? { format: file.format ?? 'epub', mode } : { format: file.format ?? 'epub' },
   })
+}
+
+function peekPrimaryFile() {
+  if (!primaryFile.value || isMissing.value) return
+  openFile(primaryFile.value, 'peek')
 }
 
 function openAuthorBrowse() {
   if (!authorQuery.value) return
   void router.push({ name: 'authors', query: { q: authorQuery.value } })
+}
+
+function openBookDetails() {
+  void router.push({ name: 'book-detail', params: { bookId: props.book.id } })
+}
+
+function handleRowClick(event: MouseEvent) {
+  if (props.selectionMode) {
+    emit('select', event)
+    return
+  }
+
+  if (thumbnailClickAction.value === 'details') {
+    openBookDetails()
+    return
+  }
+
+  emit('action', 'quick-view')
 }
 </script>
 
@@ -142,7 +160,7 @@ function openAuthorBrowse() {
       selected ? 'bg-primary/8 ring-1 ring-primary/30' : '',
       isMissing ? 'grayscale opacity-60' : 'hover:bg-muted/50',
     ]"
-    @click="selectionMode ? emit('select', $event) : emit('action', 'quick-view')"
+    @click="handleRowClick"
   >
     <!-- Selection checkbox -->
     <div
@@ -157,34 +175,22 @@ function openAuthorBrowse() {
     <BookCoverSurface
       size="mini"
       class="book-cover-surface--spine-fitted w-16 rounded shrink-0 overflow-hidden relative"
+      :disable-spine="isAudiobook"
+      :is-comic="isComic"
       :class="isMissing ? 'opacity-50 grayscale' : ''"
-      :style="[{ aspectRatio: coverAspectRatio }, !book.hasCover || !coverLoaded || coverFailed ? coverStyle : {}]"
+      :style="{ aspectRatio: coverAspectRatio }"
     >
-      <!-- Blurred background fill for mismatched aspect ratios -->
-      <img
-        v-if="book.hasCover && coverLoaded && !coverFailed"
+      <BookCoverArtwork
         :src="coverSrc"
-        class="absolute inset-0 w-full h-full object-cover scale-110 blur-md brightness-50"
-        aria-hidden="true"
-        loading="lazy"
-      />
-      <img
-        v-if="book.hasCover && !coverFailed"
-        :src="coverSrc"
-        class="absolute inset-0 w-full h-full object-contain"
-        loading="lazy"
-        decoding="async"
-        :alt="book.title ?? ''"
-        @load="handleCoverLoad"
-        @error="coverFailed = true"
-      />
-      <div v-if="book.hasCover && coverLoaded && !coverFailed" class="book-cover-spine-layer absolute z-[3]" :style="fittedCoverSpineStyle" />
-      <BookCoverPlaceholder
-        v-if="!book.hasCover || coverFailed"
+        :has-cover="book.hasCover"
         :title="book.title"
         :author-line="authorLine"
         :is-audio="isAudiobook"
         :seed="book.title ?? String(book.id)"
+        :alt="book.title ?? ''"
+        backdrop-class="blur-md brightness-50"
+        :spine="!isAudiobook"
+        :is-comic="isComic"
       />
     </BookCoverSurface>
 
@@ -243,7 +249,7 @@ function openAuthorBrowse() {
           </TooltipTrigger>
           <TooltipContent>Open as {{ primaryFile.format?.toUpperCase() ?? 'unknown' }}</TooltipContent>
         </Tooltip>
-        <Tooltip v-for="file in secondaryFiles" :key="file.id">
+        <Tooltip v-for="file in uniqueSecondaryFiles" :key="file.id">
           <TooltipTrigger as-child>
             <button
               class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-muted text-muted-foreground hover:bg-muted/70 transition-colors"
@@ -265,13 +271,17 @@ function openAuthorBrowse() {
         <DropdownMenuContent align="end">
           <DropdownMenuItem :disabled="!primaryFile || isMissing" @click="primaryFile && !isMissing && openFile(primaryFile)">
             <BookOpen class="size-4 mr-2" />
-            Open
+            Read
+          </DropdownMenuItem>
+          <DropdownMenuItem :disabled="!primaryFile || isMissing" @click="peekPrimaryFile">
+            <Eye class="size-4 mr-2" />
+            Peek
           </DropdownMenuItem>
           <DropdownMenuItem @click="emit('action', 'quick-view')">
             <PanelRight class="size-4 mr-2" />
             Quick View
           </DropdownMenuItem>
-          <DropdownMenuItem @click="router.push({ name: 'book-detail', params: { bookId: book.id } })">
+          <DropdownMenuItem @click="openBookDetails">
             <ExternalLink class="size-4 mr-2" />
             Book Details
           </DropdownMenuItem>

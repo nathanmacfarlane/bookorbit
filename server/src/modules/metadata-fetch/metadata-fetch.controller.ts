@@ -11,6 +11,8 @@ import { MetadataFetchService } from './metadata-fetch.service';
 import { ProviderRegistry } from './provider-registry';
 import { MetadataSearchParams } from './providers/metadata-search-params';
 import { ProviderConfigService } from '../metadata-preferences/provider-config.service';
+import { MetadataPreferencesService } from '../metadata-preferences/metadata-preferences.service';
+import { createGenreBlocklistTokenSet, filterCandidateGenresAgainstBlocklist } from '../../common/utils/genre-blocklist.utils';
 import { ProviderThrottleTracker } from './provider-throttle.tracker';
 
 function normalizeSearchTitle(title: string | undefined): string | undefined {
@@ -26,6 +28,7 @@ export class MetadataFetchController {
     private readonly registry: ProviderRegistry,
     private readonly providerConfig: ProviderConfigService,
     private readonly throttleTracker: ProviderThrottleTracker,
+    private readonly metadataPreferences: MetadataPreferencesService,
   ) {}
 
   @Get('providers')
@@ -67,11 +70,35 @@ export class MetadataFetchController {
       isAudiobook,
     };
 
-    return this.metadataFetchService.search(params, dto.providers).pipe(map((candidate: MetadataCandidate) => ({ data: candidate })));
+    const [preferences, providerKeys] = await Promise.all([this.metadataPreferences.getGlobal(), this.resolveEnabledProviderKeys(dto.providers)]);
+    const blockedGenreTokens = createGenreBlocklistTokenSet(preferences.options?.genres.blocklist);
+
+    return this.metadataFetchService
+      .search(params, providerKeys)
+      .pipe(map((candidate: MetadataCandidate) => ({ data: filterCandidateGenresAgainstBlocklist(candidate, blockedGenreTokens) })));
   }
 
   @Get('lookup')
   async lookup(@Query() dto: LookupMetadataDto): Promise<MetadataCandidate | null> {
-    return this.metadataFetchService.lookupById(dto.provider, dto.id);
+    const [enabledProvider] = await this.resolveEnabledProviderKeys([dto.provider]);
+    if (!enabledProvider) return null;
+
+    const [candidate, preferences] = await Promise.all([
+      this.metadataFetchService.lookupById(enabledProvider, dto.id),
+      this.metadataPreferences.getGlobal(),
+    ]);
+    if (!candidate) return null;
+    const blockedGenreTokens = createGenreBlocklistTokenSet(preferences.options?.genres.blocklist);
+    return filterCandidateGenresAgainstBlocklist(candidate, blockedGenreTokens);
+  }
+
+  private async resolveEnabledProviderKeys(requestedProviders: MetadataProviderKey[] | undefined): Promise<MetadataProviderKey[]> {
+    const config = await this.providerConfig.getConfig();
+    const registeredProviders = this.registry.all();
+    const enabledProviders = new Set(
+      registeredProviders.filter((provider) => config[provider.key]?.enabled !== false).map((provider) => provider.key),
+    );
+    const providerKeys = requestedProviders ?? registeredProviders.map((provider) => provider.key);
+    return providerKeys.filter((providerKey) => enabledProviders.has(providerKey));
   }
 }

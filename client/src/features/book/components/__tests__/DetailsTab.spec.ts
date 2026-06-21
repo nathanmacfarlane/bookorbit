@@ -73,6 +73,7 @@ function makeBook(overrides: Partial<BookDetail> = {}): BookDetail {
     libraryId: 1,
     libraryName: 'Test Library',
     addedAt: '2024-01-01T00:00:00.000Z',
+    updatedAt: null,
     status: 'present',
     title: 'Test Book',
     subtitle: null,
@@ -156,6 +157,8 @@ describe('DetailsTab - present state', () => {
           providerIds: {
             amazon: '0345415000',
             goodreads: '12345',
+            kobo: 'beautiful-ugly-3',
+            ranobedb: '1287',
           },
         }),
       },
@@ -164,6 +167,14 @@ describe('DetailsTab - present state', () => {
 
     expect(wrapper.find('a[title="Open in Amazon"]').exists()).toBe(true)
     expect(wrapper.find('a[title="Open in Goodreads"]').exists()).toBe(true)
+    const koboLink = wrapper.find('a[title="Open in Kobo"]')
+    expect(koboLink.exists()).toBe(true)
+    expect(koboLink.attributes('href')).toBe('https://www.kobo.com/us/en/ebook/beautiful-ugly-3')
+    expect(koboLink.find('img[alt="Kobo"][src="/assets/provider-icons/kobo.svg"]').exists()).toBe(true)
+    const ranobedbLink = wrapper.find('a[title="Open in RanobeDB"]')
+    expect(ranobedbLink.exists()).toBe(true)
+    expect(ranobedbLink.attributes('href')).toBe('https://ranobedb.org/book/1287')
+    expect(ranobedbLink.find('img[alt="RanobeDB"][src="/assets/provider-icons/ranobedb.svg"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('Info Links')
   })
 

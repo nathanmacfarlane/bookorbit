@@ -81,6 +81,9 @@ const AUDIBLE_DOMAINS = [
   'audible.in',
 ]
 
+const KOBO_COUNTRIES = ['us', 'ca', 'gb', 'au', 'nz', 'de', 'fr', 'it', 'es', 'nl', 'pt', 'br', 'jp']
+const KOBO_LANGUAGES = ['en', 'fr', 'de', 'it', 'es', 'nl', 'pt', 'ja', 'all']
+
 type FieldDef = {
   key: string
   label: string
@@ -155,6 +158,29 @@ const rows: RowDef[] = [
     fields: [{ key: 'coverResolution', label: 'Cover Resolution', type: 'select', options: ['high', 'standard'] }],
   },
   {
+    key: 'kobo',
+    label: 'Kobo',
+    hint: "Scrapes Kobo's public book pages. Country and language must match Kobo URL paths; bot protection can block requests.",
+    fields: [
+      {
+        key: 'country',
+        label: 'Country',
+        type: 'select',
+        options: KOBO_COUNTRIES,
+        alwaysEditable: true,
+        widthClass: 'md:w-[5.25rem] md:min-w-[5.25rem]',
+      },
+      {
+        key: 'language',
+        label: 'Language',
+        type: 'select',
+        options: KOBO_LANGUAGES,
+        alwaysEditable: true,
+        widthClass: 'md:w-[5.25rem] md:min-w-[5.25rem]',
+      },
+    ],
+  },
+  {
     key: 'audible',
     label: 'Audible',
     hint: 'Pulls audiobook metadata from Audible. No additional setup is required.',
@@ -171,9 +197,26 @@ const rows: RowDef[] = [
       blockedMessage: 'ComicVine requires an API key before it can be enabled',
     },
   },
+  { key: 'ranobedb', label: 'RanobeDB', hint: 'Japanese light novel metadata from RanobeDB. No setup required.', fields: [] },
+  {
+    key: 'lubimyczytac',
+    label: 'LubimyCzytac',
+    hint: 'Polish book catalog (lubimyczytac.pl). Scrapes public book pages. No setup required.',
+    fields: [],
+  },
+  {
+    key: 'aladin',
+    label: 'Aladin',
+    hint: 'Korean book metadata from Aladin (알라딘). A TTB Key from aladin.co.kr is required.',
+    fields: [{ key: 'ttbKey', label: 'TTB Key', type: 'password', placeholder: 'ttb...', alwaysEditable: true }],
+    enableRequirement: {
+      isConfigured: (c) => !!c.aladin.ttbKey.trim(),
+      blockedMessage: 'Aladin requires a TTB Key before it can be enabled',
+    },
+  },
 ]
 
-const TESTABLE_PROVIDERS: MetadataProviderKey[] = [MetadataProviderKey.AMAZON, MetadataProviderKey.HARDCOVER]
+const TESTABLE_PROVIDERS: MetadataProviderKey[] = [MetadataProviderKey.AMAZON, MetadataProviderKey.HARDCOVER, MetadataProviderKey.ALADIN]
 
 function statusFor(key: string) {
   return props.statuses.find((s) => s.key === key)

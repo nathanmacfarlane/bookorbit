@@ -28,12 +28,16 @@ import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import ViewHeader from '@/components/ViewHeader.vue'
 import SelectionActionBar from '@/components/SelectionActionBar.vue'
 import AddToCollectionSheet from '@/features/collection/components/AddToCollectionSheet.vue'
-import BulkUpdateTagsDialog from '@/features/book/components/BulkUpdateTagsDialog.vue'
+import BulkEditMetadataDialog from '@/features/book/components/BulkEditMetadataDialog.vue'
+import { useBulkEditMetadata } from '@/features/book/composables/useBulkEditMetadata'
+import type { BulkEditFields } from '@/features/book/composables/useBulkEditMetadata'
 import MetadataExportDialog from '@/features/book/components/MetadataExportDialog.vue'
 import SendBookDialog from '@/features/email/components/SendBookDialog.vue'
 import SaveAsSmartScopeDialog from '@/features/smart-scope/components/SaveAsSmartScopeDialog.vue'
 import DeleteBookDialog from '@/features/book/components/DeleteBookDialog.vue'
-import { useLibraryBooks, type BookCard } from '@/features/book/composables/useLibraryBooks'
+import JumpRail from '@/features/book/components/JumpRail.vue'
+import type { BookCard } from '@bookorbit/types'
+import { useBookViewWindow } from '@/features/book/composables/useBookViewWindow'
 import { useViewSearch } from '@/features/book/composables/useViewSearch'
 import { useSeriesCollapsePreference } from '@/features/book/composables/useSeriesCollapsePreference'
 
@@ -96,20 +100,42 @@ watch(prefs, () => {
 const { searchQuery, debouncedQuery, clearSearch } = useViewSearch()
 
 const {
-  items: books,
+  booksProxy: books,
+  slots,
   total,
   loading,
   initialized: booksInitialized,
   error,
   filter,
   sort,
-  hasMore,
-  load,
-  clear,
-} = useLibraryBooks(libraryId, collapseEnabledRef, debouncedQuery)
+  reset: resetBooks,
+  updateBooks,
+  contiguousPrefix,
+  hasMorePrefix,
+  loadMorePrefix,
+  handleRange,
+  handleFirstVisibleIndex,
+  registerScroller,
+  handleJump,
+  buckets,
+  bucketKind,
+  refreshBuckets,
+  railVisible,
+  activeBucketKey,
+  letterTemplate,
+  railGutterReserved,
+  releaseRailGutter,
+} = useBookViewWindow({
+  scopeId: libraryId,
+  listEndpoint: (id) => `/api/v1/libraries/${id}/books`,
+  bucketsEndpoint: (id) => `/api/v1/libraries/${id}/books/jump-buckets`,
+  viewMode: effectiveViewMode,
+  collapseEnabled: collapseEnabledRef,
+  q: debouncedQuery,
+})
 const { onLibraryUploadCompleted } = useLibraryUploadEvents()
 const { setBookContext } = useBookNavigation()
-useBookViewContext(books, total, () => load())
+useBookViewContext(slots, total, loadMorePrefix)
 
 const FILTER_STORAGE_PREFIX = 'bookorbit:filter:library:'
 function getFilterKey(id: number) {
@@ -263,7 +289,7 @@ function forgetSavedFilter() {
 }
 
 const { subscribeLibrary, getProgress, isScanning } = useScanProgress()
-const { newBookIds, start: startLiveScan, stop: stopLiveScan } = useLiveScanBooks(libraryId, books, total)
+const { newBookIds, start: startLiveScan, stop: stopLiveScan } = useLiveScanBooks(libraryId, books)
 const scanProgress = computed(() => (libraryId.value !== null ? getProgress(libraryId.value) : undefined))
 
 watch(
@@ -280,23 +306,20 @@ watch(
 )
 
 const { onBookMissing, onBookRestored, onBookMoved } = useBookEvents()
+
+function applyStatusToLoadedBooks(bookIds: number[], status: BookCard['status']) {
+  const targets = new Set(bookIds)
+  updateBooks(books.value.filter((book) => targets.has(book.id) && book.status !== status).map((book) => ({ ...book, status })))
+}
+
 onBookMissing((bookIds) => {
-  const missing = new Set(bookIds)
-  for (const book of books.value) {
-    if (missing.has(book.id)) book.status = 'missing'
-  }
+  applyStatusToLoadedBooks(bookIds, 'missing')
 })
 onBookRestored((bookIds) => {
-  const restored = new Set(bookIds)
-  for (const book of books.value) {
-    if (restored.has(book.id)) book.status = 'present'
-  }
+  applyStatusToLoadedBooks(bookIds, 'present')
 })
 onBookMoved((bookIds) => {
-  const moved = new Set(bookIds)
-  for (const book of books.value) {
-    if (moved.has(book.id)) book.status = 'present'
-  }
+  applyStatusToLoadedBooks(bookIds, 'present')
 })
 
 const filterOpen = ref(false)
@@ -334,28 +357,24 @@ function closeFilterPanel() {
 }
 
 const { sentinel } = useInfiniteScrollSentinel({
-  hasMore,
+  hasMore: hasMorePrefix,
   loading,
-  loadMore: () => load(),
+  loadMore: loadMorePrefix,
 })
 
 const stopUploadCompletedListener = onLibraryUploadCompleted((event) => {
   if (event.uploadedCount === 0) return
   if (libraryId.value === event.libraryId) {
-    load(true)
+    resetBooks()
+    refreshBuckets()
   }
 })
 
 onUnmounted(() => stopUploadCompletedListener())
 
-watch(libraryId, (newId) => {
-  if (newId === null) clear()
+watch(libraryId, () => {
   clearSearch()
 })
-
-watch(debouncedQuery, () => load(true))
-
-watch(filter, () => load(true), { deep: true })
 
 const saveAsSmartScopeOpen = ref(false)
 const querySelection = ref<QuerySelectionState | null>(null)
@@ -393,21 +412,39 @@ const {
   handleDownloadFiles,
   handleBulkSetStatus,
   handleBulkSetRating,
-  handleBulkUpdateTags,
   handleBulkSetField,
   handleBulkSetMetadataLock,
   handleDeleteSelected,
   addToCollectionOpen,
-  bulkTagsOpen,
+  bulkEditOpen,
   sendBookOpen,
   quickViewBookId,
   quickViewOpen,
   handleBookAction,
   handleTableBookUpdate,
+  handleEditIndividually,
 } = useBookTableShell({
   books,
   querySelection,
 })
+
+const bookGridRef = ref<{ scrollToIndex: (index: number) => void } | null>(null)
+
+watch(
+  [bookGridRef, tableRef, effectiveViewMode],
+  () => {
+    if (effectiveViewMode.value === 'grid' && bookGridRef.value) {
+      const grid = bookGridRef.value
+      registerScroller((index) => grid.scrollToIndex(index))
+    } else if (effectiveViewMode.value === 'table' && tableRef.value) {
+      const table = tableRef.value
+      registerScroller((index) => table.scrollToIndex(index))
+    } else {
+      registerScroller(null)
+    }
+  },
+  { immediate: true },
+)
 
 const metadataExportOpen = ref(false)
 const metadataExportDefaultScope = ref<'selected' | 'all-matching'>('all-matching')
@@ -439,19 +476,43 @@ watch(selectionMode, (active) => {
   }
 })
 
+const {
+  submit: submitBulkEdit,
+  submitting: bulkEditSubmitting,
+  selectedCount: bulkEditCount,
+} = useBulkEditMetadata(selectedIds, books, querySelection)
+
 function handleEditSelected() {
+  const count = querySelection.value ? querySelection.value.total : selectedIds.value.size
+  if (count === 0) return
+  if (count >= 2 || querySelection.value) {
+    bulkEditOpen.value = true
+    return
+  }
   const ids = [...selectedIds.value]
-  if (ids.length === 0) return
   setBookContext(ids, ids.length)
   router.push({ name: 'book-detail', params: { bookId: ids[0] }, query: { tab: 'edit' } })
   exitSelectionMode()
+}
+
+async function handleBulkEditConfirm(fields: BulkEditFields) {
+  const result = await submitBulkEdit(fields)
+  if (result) {
+    bulkEditOpen.value = false
+    if (querySelection.value || hasAddOrRemoveFields(fields)) {
+      resetBooks()
+    }
+  }
+}
+
+function hasAddOrRemoveFields(fields: BulkEditFields): boolean {
+  return [fields.authors, fields.genres, fields.tags, fields.narrators].some((f) => f && f.mode !== 'replace')
 }
 
 async function handleToggleCollapse() {
   if (libraryId.value === null) return
   const next = !collapseEnabledRef.value
   collapseEnabledRef.value = next
-  load(true)
   await setPreference({ libraryId: libraryId.value }, next)
 }
 </script>
@@ -695,6 +756,67 @@ async function handleToggleCollapse() {
       </div>
     </section>
 
+    <!-- Filter builder panel rendered outside <main> so it stays anchored when the list is scrolled -->
+    <div v-if="filterOpen && !libraryNotFound" class="mb-4 p-3 rounded-md border border-border bg-card">
+      <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <span class="text-xs font-medium text-muted-foreground sm:shrink-0">Filter rules</span>
+        <div class="flex w-full flex-wrap items-center gap-1.5 sm:w-auto sm:flex-nowrap">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <button
+                v-if="activeFilterCount > 0"
+                @click="saveAsSmartScopeOpen = true"
+                class="flex min-h-7 items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <Telescope :size="13" />
+                <span class="hidden sm:inline whitespace-nowrap">Save as Smart Scope</span>
+                <span class="sm:hidden whitespace-nowrap">Save Scope</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Save this filter as a named Smart Scope</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <button
+                v-if="activeFilterCount > 0"
+                @click="saveFilter"
+                class="flex min-h-7 items-center gap-1.5 rounded-md border px-3 py-1 text-xs font-medium transition-colors whitespace-nowrap"
+                :class="
+                  isFilterSaved
+                    ? 'border-primary/40 text-primary bg-primary/8'
+                    : 'border-input text-muted-foreground bg-background hover:text-foreground hover:bg-muted'
+                "
+              >
+                <BookmarkCheck v-if="isFilterSaved" :size="13" />
+                <Bookmark v-else :size="13" />
+                {{ isFilterSaved ? 'Saved' : 'Save filter' }}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{{ isFilterSaved ? 'Filter saved' : 'Save filter for this library' }}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <button
+                v-if="hasSavedFilter"
+                @click="forgetSavedFilter"
+                class="h-6 w-6 flex items-center justify-center rounded text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors"
+              >
+                <X :size="11" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Remove saved filter</TooltipContent>
+          </Tooltip>
+          <button
+            class="min-h-7 whitespace-nowrap rounded-md border border-input px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            @click="closeFilterPanel"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+      <BookFilterBuilder v-model="filter" />
+    </div>
+
     <main :class="effectiveViewMode === 'table' ? 'flex-1 min-h-0 flex flex-col overflow-hidden' : 'flex-1 min-h-0 overflow-y-auto'">
       <EntityNotFound v-if="libraryNotFound" entity="Library" />
 
@@ -702,67 +824,6 @@ async function handleToggleCollapse() {
         <div v-if="error" class="text-sm text-destructive mb-4">{{ error }}</div>
 
         <ScanProgressBar :progress="scanProgress" class="mb-3" />
-
-        <!-- Filter builder panel -->
-        <div v-if="filterOpen" class="mb-4 p-3 rounded-md border border-border bg-card">
-          <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <span class="text-xs font-medium text-muted-foreground sm:shrink-0">Filter rules</span>
-            <div class="flex w-full flex-wrap items-center gap-1.5 sm:w-auto sm:flex-nowrap">
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <button
-                    v-if="activeFilterCount > 0"
-                    @click="saveAsSmartScopeOpen = true"
-                    class="flex min-h-7 items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  >
-                    <Telescope :size="13" />
-                    <span class="hidden sm:inline whitespace-nowrap">Save as Smart Scope</span>
-                    <span class="sm:hidden whitespace-nowrap">Save Scope</span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>Save this filter as a named Smart Scope</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <button
-                    v-if="activeFilterCount > 0"
-                    @click="saveFilter"
-                    class="flex min-h-7 items-center gap-1.5 rounded-md border px-3 py-1 text-xs font-medium transition-colors whitespace-nowrap"
-                    :class="
-                      isFilterSaved
-                        ? 'border-primary/40 text-primary bg-primary/8'
-                        : 'border-input text-muted-foreground bg-background hover:text-foreground hover:bg-muted'
-                    "
-                  >
-                    <BookmarkCheck v-if="isFilterSaved" :size="13" />
-                    <Bookmark v-else :size="13" />
-                    {{ isFilterSaved ? 'Saved' : 'Save filter' }}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>{{ isFilterSaved ? 'Filter saved' : 'Save filter for this library' }}</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger as-child>
-                  <button
-                    v-if="hasSavedFilter"
-                    @click="forgetSavedFilter"
-                    class="h-6 w-6 flex items-center justify-center rounded text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 transition-colors"
-                  >
-                    <X :size="11" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>Remove saved filter</TooltipContent>
-              </Tooltip>
-              <button
-                class="min-h-7 whitespace-nowrap rounded-md border border-input px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                @click="closeFilterPanel"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-          <BookFilterBuilder v-model="filter" />
-        </div>
 
         <!-- Empty state: no matches with filters -->
         <div
@@ -792,21 +853,25 @@ async function handleToggleCollapse() {
         <!-- Grid view -->
         <VirtualBookGrid
           v-if="effectiveViewMode === 'grid' && books.length > 0"
-          :books="books"
+          ref="bookGridRef"
+          :books="slots"
           :cover-size="coverSize"
           :grid-gap="gridGap"
           :selection-mode="selectionMode"
           :is-selected="isSelected"
           :new-book-ids="newBookIds"
+          :rail-gutter="railGutterReserved"
+          @range="handleRange"
+          @first-visible-index="handleFirstVisibleIndex"
           @action="handleBookAction"
           @select="handleSelect"
           @update:book="handleTableBookUpdate"
         />
 
         <!-- List view -->
-        <div v-if="effectiveViewMode === 'list' && books.length > 0" class="flex flex-col divide-y divide-border">
+        <div v-if="effectiveViewMode === 'list' && contiguousPrefix.length > 0" class="flex flex-col divide-y divide-border">
           <BookListRow
-            v-for="book in books"
+            v-for="book in contiguousPrefix"
             :key="book.id"
             :book="book"
             :selection-mode="selectionMode"
@@ -820,10 +885,9 @@ async function handleToggleCollapse() {
         <VirtualBookTable
           v-if="effectiveViewMode === 'table'"
           ref="tableRef"
-          :books="books"
+          :books="slots"
           :in-flight="inFlight"
           :sort="sort"
-          :has-more="hasMore"
           :loading="loading"
           :total="total"
           view-type="library"
@@ -836,16 +900,29 @@ async function handleToggleCollapse() {
           @action="handleBookAction"
           @select="handleSelect"
           @update:book="handleTableBookUpdate"
-          @load-more="load"
+          @visible-range="handleRange"
+          @first-visible-index="handleFirstVisibleIndex"
           @select-all="handleSelectAllLoaded"
           @enter-selection="enterSelectionMode"
           @quick-filter="handleQuickFilter"
         />
 
-        <div v-if="effectiveViewMode !== 'table'" ref="sentinel" class="h-8 mt-4 flex items-center justify-center">
+        <div v-if="effectiveViewMode === 'list'" ref="sentinel" class="h-8 mt-4 flex items-center justify-center">
           <span v-if="loading" class="text-xs text-muted-foreground">Loading...</span>
-          <span v-else-if="!hasMore && books.length > 0" class="text-xs text-muted-foreground">All {{ total.toLocaleString() }} books loaded</span>
+          <span v-else-if="!hasMorePrefix && contiguousPrefix.length > 0" class="text-xs text-muted-foreground"
+            >All {{ total.toLocaleString() }} books loaded</span
+          >
         </div>
+
+        <JumpRail
+          :visible="railVisible"
+          :buckets="buckets"
+          :kind="bucketKind ?? 'letter'"
+          :active-key="activeBucketKey"
+          :template="bucketKind === 'letter' ? letterTemplate : undefined"
+          @jump="handleJump"
+          @after-leave="releaseRailGutter"
+        />
       </template>
     </main>
   </section>
@@ -881,16 +958,17 @@ async function handleToggleCollapse() {
     :visible="selectionMode"
     :count="querySelection ? querySelection.total : selectedCount"
     :in-flight="inFlight"
+    :query-scoped="querySelection !== null"
     @send="sendBookOpen = true"
     @download="handleDownloadFiles"
     @export-metadata="openMetadataExport(querySelection ? 'all-matching' : 'selected')"
     @add-to-collection="addToCollectionOpen = true"
     @edit="handleEditSelected"
+    @edit-individually="handleEditIndividually"
     @refresh-metadata="handleBulkRefreshMetadata"
     @re-extract-cover="handleBulkReExtractCover"
     @set-status="handleBulkSetStatus"
     @set-rating="handleBulkSetRating"
-    @edit-tags="bulkTagsOpen = true"
     @set-field="handleBulkSetField"
     @lock-metadata="handleBulkSetMetadataLock"
     @delete="handleDeleteSelected"
@@ -917,7 +995,13 @@ async function handleToggleCollapse() {
     @done="exitSelectionMode"
   />
 
-  <BulkUpdateTagsDialog :open="bulkTagsOpen" :book-count="selectedCount" @update:open="bulkTagsOpen = $event" @confirm="handleBulkUpdateTags" />
+  <BulkEditMetadataDialog
+    :open="bulkEditOpen"
+    :book-count="bulkEditCount"
+    :submitting="bulkEditSubmitting"
+    @update:open="bulkEditOpen = $event"
+    @confirm="handleBulkEditConfirm"
+  />
 
   <SendBookDialog :open="sendBookOpen" :book-ids="[...selectedIds]" @update:open="sendBookOpen = $event" @sent="exitSelectionMode" />
 

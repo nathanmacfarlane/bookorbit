@@ -1,15 +1,24 @@
-import { BadRequestException, Inject, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { basename, dirname, extname, join } from 'path';
 import { access as fsAccess, readFile, stat, unlink } from 'fs/promises';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
-import type { BookDockAutoFinalizeMetadataMode, BookDockFinalizeFileResult, BookDockFinalizeResult, BookDockMetadata } from '@bookorbit/types';
+import type {
+  AudiobookChapter,
+  BookDockAutoFinalizeMetadataMode,
+  BookDockFinalizeFileResult,
+  BookDockFinalizeResult,
+  BookDockMetadata,
+} from '@bookorbit/types';
 import { NotificationType, resolveUploadPath } from '@bookorbit/types';
 import { NotificationService } from '../notification/notification.service';
+import { SeriesIdentityService } from '../../common/services/series-identity.service';
+import { SeriesMembershipService } from '../../common/services/series-membership.service';
+import { formatSeriesIndex } from '../../common/utils/series-index-format.utils';
 import { DB } from '../../db';
 import * as schema from '../../db/schema';
-import { bookMetadata, books, libraries, libraryFolders } from '../../db/schema';
+import { authors, bookAuthors, bookMetadata, books, libraries, libraryFolders } from '../../db/schema';
 import { AppSettingsService } from '../app-settings/app-settings.service';
 import { LibraryService } from '../library/library.service';
 import { MetadataService } from '../metadata/metadata.service';
@@ -24,6 +33,11 @@ import type { BookDockFileRow } from '../../db/schema';
 type Db = NodePgDatabase<typeof schema>;
 
 const BATCH_SIZE = 100;
+const MIN_PUBLISHED_YEAR = 1000;
+const MAX_PUBLISHED_YEAR = 2200;
+const PUBLISHED_YEAR_RANGE_CONSTRAINT = 'book_metadata_published_year_range_chk';
+const INVALID_PUBLISHED_YEAR_MESSAGE = `Invalid metadata: published year must be between ${MIN_PUBLISHED_YEAR} and ${MAX_PUBLISHED_YEAR}.`;
+const INVALID_METADATA_MESSAGE = 'Invalid metadata values for this file. Review metadata fields and try again.';
 
 type NormalizedFinalizeMetadata = {
   title: string | null;
@@ -58,6 +72,8 @@ export class BookDockFinalizeService implements OnModuleInit {
     private readonly events: BookDockEventsService,
     private readonly gateway: BookDockGateway,
     private readonly notificationService: NotificationService,
+    @Optional() private readonly seriesIdentity?: SeriesIdentityService,
+    @Optional() private readonly seriesMemberships?: SeriesMembershipService,
   ) {}
 
   onModuleInit() {
@@ -230,7 +246,7 @@ export class BookDockFinalizeService implements OnModuleInit {
       const newName = destPath.substring(folder.path.length + 1);
       return { fileId: row.id, fileName: row.fileName, newName, success: true, bookId };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Finalization failed';
+      const message = resolveFinalizeErrorMessage(err);
       this.logger.warn(`Finalize failed for Book Dock file ${row.id}: ${message}`);
       return { fileId: row.id, fileName: row.fileName, success: false, message };
     }
@@ -316,7 +332,10 @@ export class BookDockFinalizeService implements OnModuleInit {
     defaultLibraryId: number | undefined,
     overrideMap: Map<number, { libraryId?: number; folderId?: number }>,
   ): Promise<Map<string, number>> {
-    const needsByLibrary = new Map<number, { isbn13: Set<string>; isbn10: Set<string>; titles: Set<string> }>();
+    const needsByLibrary = new Map<
+      number,
+      { isbn13: Set<string>; isbn10: Set<string>; titles: Set<string>; authors: Set<string>; titleAuthorPairs: Set<string> }
+    >();
 
     for (const row of rows) {
       const override = overrideMap.get(row.id);
@@ -326,7 +345,7 @@ export class BookDockFinalizeService implements OnModuleInit {
       const meta = normalizeFinalizeMetadata(row.selectedMetadata ?? row.embeddedMetadata ?? {});
       let bucket = needsByLibrary.get(libraryId);
       if (!bucket) {
-        bucket = { isbn13: new Set(), isbn10: new Set(), titles: new Set() };
+        bucket = { isbn13: new Set(), isbn10: new Set(), titles: new Set(), authors: new Set(), titleAuthorPairs: new Set() };
         needsByLibrary.set(libraryId, bucket);
       }
 
@@ -335,7 +354,13 @@ export class BookDockFinalizeService implements OnModuleInit {
       } else if (meta.isbn10) {
         bucket.isbn10.add(meta.isbn10);
       } else if (meta.title) {
+        const normalizedAuthors = normalizeDuplicateAuthors(meta.authors);
+        if (normalizedAuthors.length === 0) continue;
         bucket.titles.add(meta.title.toLowerCase());
+        for (const authorName of normalizedAuthors) {
+          bucket.authors.add(authorName);
+          bucket.titleAuthorPairs.add(`${meta.title.toLowerCase()}|${authorName}`);
+        }
       }
     }
 
@@ -371,18 +396,34 @@ export class BookDockFinalizeService implements OnModuleInit {
         }
       }
 
-      if (values.titles.size > 0) {
-        const rowsByTitle = await this.db
+      if (values.titles.size > 0 && values.authors.size > 0) {
+        const rowsByTitleAuthor = await this.db
           .select({
             bookId: bookMetadata.bookId,
             normalizedTitle: sql<string>`lower(${bookMetadata.title})`,
+            normalizedAuthor: sql<string>`lower(${authors.name})`,
           })
           .from(bookMetadata)
           .innerJoin(books, eq(books.id, bookMetadata.bookId))
-          .where(and(eq(books.libraryId, libraryId), inArray(sql<string>`lower(${bookMetadata.title})`, [...values.titles])));
-        for (const row of rowsByTitle) {
-          if (!row.normalizedTitle) continue;
-          const key = this.buildDuplicateLookupKey(libraryId, { isbn13: null, isbn10: null, title: row.normalizedTitle });
+          .innerJoin(bookAuthors, eq(bookAuthors.bookId, bookMetadata.bookId))
+          .innerJoin(authors, eq(authors.id, bookAuthors.authorId))
+          .where(
+            and(
+              eq(books.libraryId, libraryId),
+              inArray(sql<string>`lower(${bookMetadata.title})`, [...values.titles]),
+              inArray(sql<string>`lower(${authors.name})`, [...values.authors]),
+            ),
+          );
+        for (const row of rowsByTitleAuthor) {
+          if (!row.normalizedTitle || !row.normalizedAuthor) continue;
+          const pairKey = `${row.normalizedTitle}|${row.normalizedAuthor}`;
+          if (!values.titleAuthorPairs.has(pairKey)) continue;
+          const key = this.buildDuplicateLookupKey(libraryId, {
+            isbn13: null,
+            isbn10: null,
+            title: row.normalizedTitle,
+            author: row.normalizedAuthor,
+          });
           if (key && !lookup.has(key)) {
             lookup.set(key, row.bookId);
           }
@@ -393,31 +434,34 @@ export class BookDockFinalizeService implements OnModuleInit {
     return lookup;
   }
 
-  private buildDuplicateLookupKey(libraryId: number, meta: Pick<NormalizedFinalizeMetadata, 'isbn13' | 'isbn10' | 'title'>): string | null {
+  private buildDuplicateLookupKey(
+    libraryId: number,
+    meta: { isbn13: string | null; isbn10: string | null; title: string | null; author?: string | null },
+  ): string | null {
     const isbn = meta.isbn13 ?? meta.isbn10;
     if (isbn) {
       const isbnKind = meta.isbn13 ? 'isbn13' : 'isbn10';
       return `library:${libraryId}|${isbnKind}:${isbn}`;
     }
-    if (meta.title) {
-      return `library:${libraryId}|title:${meta.title.toLowerCase()}`;
+    if (meta.title && meta.author) {
+      return `library:${libraryId}|title:${meta.title.toLowerCase()}|author:${meta.author.toLowerCase()}`;
     }
     return null;
   }
 
   private async findDuplicate(
     libraryId: number,
-    meta: Pick<NormalizedFinalizeMetadata, 'isbn13' | 'isbn10' | 'title'>,
+    meta: Pick<NormalizedFinalizeMetadata, 'isbn13' | 'isbn10' | 'title' | 'authors'>,
     duplicateLookup?: Map<string, number>,
   ): Promise<number | null> {
-    const lookupKey = this.buildDuplicateLookupKey(libraryId, meta);
-    if (lookupKey && duplicateLookup?.has(lookupKey)) {
-      return duplicateLookup.get(lookupKey) ?? null;
-    }
-
     const isbn = meta.isbn13 ?? meta.isbn10;
 
     if (isbn) {
+      const lookupKey = this.buildDuplicateLookupKey(libraryId, { isbn13: meta.isbn13, isbn10: meta.isbn10, title: null, author: null });
+      if (lookupKey && duplicateLookup?.has(lookupKey)) {
+        return duplicateLookup.get(lookupKey) ?? null;
+      }
+
       const conditions = meta.isbn13 ? [eq(bookMetadata.isbn13, meta.isbn13)] : [eq(bookMetadata.isbn10, meta.isbn10!)];
 
       const [existing] = await this.db
@@ -431,11 +475,34 @@ export class BookDockFinalizeService implements OnModuleInit {
     }
 
     if (!isbn && meta.title) {
+      const normalizedAuthors = normalizeDuplicateAuthors(meta.authors);
+      if (normalizedAuthors.length === 0) return null;
+
+      for (const authorName of normalizedAuthors) {
+        const lookupKey = this.buildDuplicateLookupKey(libraryId, {
+          isbn13: null,
+          isbn10: null,
+          title: meta.title,
+          author: authorName,
+        });
+        if (lookupKey && duplicateLookup?.has(lookupKey)) {
+          return duplicateLookup.get(lookupKey) ?? null;
+        }
+      }
+
       const [existing] = await this.db
         .select({ bookId: bookMetadata.bookId })
         .from(bookMetadata)
         .innerJoin(books, eq(books.id, bookMetadata.bookId))
-        .where(and(eq(books.libraryId, libraryId), sql`lower(${bookMetadata.title}) = lower(${meta.title})`))
+        .innerJoin(bookAuthors, eq(bookAuthors.bookId, bookMetadata.bookId))
+        .innerJoin(authors, eq(authors.id, bookAuthors.authorId))
+        .where(
+          and(
+            eq(books.libraryId, libraryId),
+            sql`lower(${bookMetadata.title}) = lower(${meta.title})`,
+            inArray(sql<string>`lower(${authors.name})`, normalizedAuthors),
+          ),
+        )
         .limit(1);
 
       if (existing) return existing.bookId;
@@ -478,12 +545,8 @@ export class BookDockFinalizeService implements OnModuleInit {
     if (meta.isbn13) tokens['isbn'] = meta.isbn13;
     if (meta.publishedYear) tokens['year'] = String(meta.publishedYear);
     if (meta.seriesName) tokens['series'] = meta.seriesName;
-    if (meta.seriesIndex != null) {
-      const whole = Math.floor(meta.seriesIndex);
-      const fraction = meta.seriesIndex - whole;
-      const padded = String(whole).padStart(2, '0');
-      tokens['seriesIndex'] = fraction > 0 ? `${padded}.${String(fraction).split('.')[1]}` : padded;
-    }
+    const seriesIndex = formatSeriesIndex(meta.seriesIndex ?? null);
+    if (seriesIndex) tokens['seriesIndex'] = seriesIndex;
     if (meta.authors && meta.authors.length > 0) {
       tokens['authors'] = meta.authors.join(', ');
     }
@@ -493,6 +556,7 @@ export class BookDockFinalizeService implements OnModuleInit {
 
   private async applyMetadata(bookId: number, row: BookDockFileRow): Promise<void> {
     const meta = normalizeFinalizeMetadata(row.selectedMetadata ?? row.embeddedMetadata);
+    const audio = resolveAudioFinalizeFields(row.embeddedMetadata ?? row.selectedMetadata);
     let selectedCoverApplied = false;
 
     const selectedCoverUrl = meta.coverUrl;
@@ -509,23 +573,27 @@ export class BookDockFinalizeService implements OnModuleInit {
       }
     }
 
+    const scalarFields = {
+      title: meta.title ?? null,
+      subtitle: meta.subtitle ?? null,
+      description: meta.description ?? null,
+      isbn10: meta.isbn10 ?? null,
+      isbn13: meta.isbn13 ?? null,
+      publisher: meta.publisher ?? null,
+      publishedYear: meta.publishedYear ?? null,
+      language: meta.language ?? null,
+      seriesName: meta.seriesName ?? null,
+      seriesIndex: meta.seriesIndex ?? null,
+      pageCount: meta.pageCount ?? null,
+      updatedAt: new Date(),
+    };
+    const patch = (await this.seriesIdentity?.resolveMetadataPatch(scalarFields)) ?? scalarFields;
+
     await this.db
       .update(bookMetadata)
-      .set({
-        title: meta.title ?? null,
-        subtitle: meta.subtitle ?? null,
-        description: meta.description ?? null,
-        isbn10: meta.isbn10 ?? null,
-        isbn13: meta.isbn13 ?? null,
-        publisher: meta.publisher ?? null,
-        publishedYear: meta.publishedYear ?? null,
-        language: meta.language ?? null,
-        seriesName: meta.seriesName ?? null,
-        seriesIndex: meta.seriesIndex ?? null,
-        pageCount: meta.pageCount ?? null,
-        updatedAt: new Date(),
-      })
+      .set({ ...patch, ...buildAudioMetadataPatch(audio) })
       .where(eq(bookMetadata.bookId, bookId));
+    await this.seriesMemberships?.syncPrimaryFromMetadata(bookId);
 
     if (meta.authors.length > 0) {
       await this.metadataService.replaceAuthors(
@@ -536,6 +604,13 @@ export class BookDockFinalizeService implements OnModuleInit {
 
     if (meta.genres.length > 0) {
       await this.metadataService.replaceGenres(bookId, meta.genres);
+    }
+
+    if (audio.narrators.length > 0) {
+      await this.metadataService.replaceNarrators(
+        bookId,
+        audio.narrators.map((name) => ({ name, sortName: null })),
+      );
     }
   }
 
@@ -588,6 +663,13 @@ function normalizeInteger(value: unknown): number | null {
   return Math.floor(parsed);
 }
 
+function normalizePublishedYear(value: unknown): number | null {
+  const parsed = normalizeInteger(value);
+  if (parsed === null) return null;
+  if (parsed < MIN_PUBLISHED_YEAR || parsed > MAX_PUBLISHED_YEAR) return null;
+  return parsed;
+}
+
 function normalizeReal(value: unknown): number | null {
   const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number.parseFloat(value.trim()) : NaN;
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
@@ -626,6 +708,18 @@ function normalizeStringArray(value: unknown, maxLength: number): string[] {
   return normalized;
 }
 
+function normalizeDuplicateAuthors(value: string[] | null | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  const normalized = new Set<string>();
+  for (const author of value) {
+    if (typeof author !== 'string') continue;
+    const trimmed = author.trim().toLowerCase();
+    if (!trimmed) continue;
+    normalized.add(trimmed);
+  }
+  return [...normalized];
+}
+
 function normalizeFinalizeMetadata(meta: BookDockMetadata | null | undefined): NormalizedFinalizeMetadata {
   return {
     title: normalizeText(meta?.title, 1000),
@@ -634,7 +728,7 @@ function normalizeFinalizeMetadata(meta: BookDockMetadata | null | undefined): N
     isbn10: normalizeIsbn(meta?.isbn10, 10),
     isbn13: normalizeIsbn(meta?.isbn13, 13),
     publisher: normalizeText(meta?.publisher, 500),
-    publishedYear: normalizeInteger(meta?.publishedYear),
+    publishedYear: normalizePublishedYear(meta?.publishedYear),
     language: normalizeLanguage(meta?.language),
     pageCount: normalizeInteger(meta?.pageCount),
     seriesName: normalizeText(meta?.seriesName, 500),
@@ -643,6 +737,102 @@ function normalizeFinalizeMetadata(meta: BookDockMetadata | null | undefined): N
     genres: normalizeStringArray(meta?.genres, 200),
     coverUrl: normalizeText(meta?.coverUrl),
   };
+}
+
+type AudioFinalizeFields = {
+  durationSeconds: number | null;
+  chapters: AudiobookChapter[] | null;
+  narrators: string[];
+};
+
+function resolveAudioFinalizeFields(meta: BookDockMetadata | null | undefined): AudioFinalizeFields {
+  return {
+    durationSeconds: normalizeDurationSeconds(meta?.durationSeconds),
+    chapters: normalizeChapters(meta?.chapters),
+    narrators: normalizeStringArray(meta?.narrators, 500),
+  };
+}
+
+function buildAudioMetadataPatch(audio: AudioFinalizeFields): { durationSeconds?: number; chapters?: AudiobookChapter[] } {
+  const patch: { durationSeconds?: number; chapters?: AudiobookChapter[] } = {};
+  if (audio.durationSeconds !== null) patch.durationSeconds = audio.durationSeconds;
+  if (audio.chapters !== null) patch.chapters = audio.chapters;
+  return patch;
+}
+
+function normalizeDurationSeconds(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number.parseFloat(value.trim()) : NaN;
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.round(parsed);
+}
+
+function normalizeChapters(value: unknown): AudiobookChapter[] | null {
+  if (!Array.isArray(value)) return null;
+  const chapters: AudiobookChapter[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const candidate = item as { title?: unknown; startMs?: unknown };
+    const startMs =
+      typeof candidate.startMs === 'number'
+        ? candidate.startMs
+        : typeof candidate.startMs === 'string'
+          ? Number.parseFloat(candidate.startMs.trim())
+          : NaN;
+    if (!Number.isFinite(startMs) || startMs < 0) continue;
+    const title = typeof candidate.title === 'string' ? candidate.title : '';
+    chapters.push({ title, startMs: Math.round(startMs) });
+  }
+  return chapters.length > 0 ? chapters : null;
+}
+
+function resolveFinalizeErrorMessage(error: unknown): string {
+  if (isPublishedYearConstraintViolation(error)) {
+    return INVALID_PUBLISHED_YEAR_MESSAGE;
+  }
+  if (isBookMetadataConstraintViolation(error)) {
+    return INVALID_METADATA_MESSAGE;
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return 'Finalization failed';
+}
+
+function isPublishedYearConstraintViolation(error: unknown): boolean {
+  for (const entry of iterateErrorChain(error)) {
+    if (entry.code === '23514') {
+      const constraint = asString(entry.constraint);
+      if (constraint === PUBLISHED_YEAR_RANGE_CONSTRAINT) return true;
+      const message = asString(entry.message);
+      if (message.includes(PUBLISHED_YEAR_RANGE_CONSTRAINT)) return true;
+    }
+  }
+  return false;
+}
+
+function isBookMetadataConstraintViolation(error: unknown): boolean {
+  for (const entry of iterateErrorChain(error)) {
+    if (entry.code !== '23514') continue;
+    const constraint = asString(entry.constraint);
+    if (constraint.startsWith('book_metadata_')) return true;
+    const message = asString(entry.message);
+    if (message.includes('book_metadata')) return true;
+  }
+  return false;
+}
+
+function* iterateErrorChain(error: unknown): Generator<Record<string, unknown>> {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    yield current as Record<string, unknown>;
+    current = (current as { cause?: unknown }).cause;
+  }
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
 }
 
 function mergeBookDockMetadata(

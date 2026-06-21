@@ -43,6 +43,7 @@ function makeService() {
     saveExtractedCoverBytes: vi.fn().mockResolvedValue(undefined),
     replaceAuthors: vi.fn().mockResolvedValue(undefined),
     replaceGenres: vi.fn().mockResolvedValue(undefined),
+    replaceNarrators: vi.fn().mockResolvedValue(undefined),
   };
   const validator = {
     validateFormat: vi.fn(),
@@ -421,6 +422,42 @@ describe('BookDockFinalizeService', () => {
       expect(storage.moveToPath).toHaveBeenNthCalledWith(2, '/library/new/book.epub', '/tmp/book.epub');
     });
 
+    it('returns a friendly metadata validation message when book metadata constraints fail', async () => {
+      const { service, storage, processor } = makeService();
+      vi.spyOn(service as never, 'findLibraryOrFail').mockResolvedValue({ id: 5, allowedFormats: ['epub'], fileNamingPattern: null } as never);
+      vi.spyOn(service as never, 'findFolderOrFail').mockResolvedValue({ id: 9, libraryId: 5, path: '/library' } as never);
+      vi.spyOn(service as never, 'resolveDestination').mockResolvedValue('/library/new/book.epub' as never);
+      vi.spyOn(service as never, 'findDuplicate').mockResolvedValue(null as never);
+      mockAccess.mockRejectedValueOnce(new Error('missing'));
+      mockStat.mockResolvedValueOnce({ size: 321 } as never);
+      processor.createBookRecord.mockResolvedValueOnce({ bookId: 808 });
+      const constraintError = new Error('Failed query: update "book_metadata" set ...');
+      (constraintError as Error & { cause?: unknown }).cause = {
+        code: '23514',
+        constraint: 'book_metadata_published_year_range_chk',
+      };
+      vi.spyOn(service as never, 'applyMetadata').mockRejectedValueOnce(constraintError as never);
+
+      const result = await (service as any).finalizeFile(
+        makeRow({ targetLibraryId: 5, targetFolderId: 9 }),
+        undefined,
+        undefined,
+        new Map(),
+        1,
+        true,
+      );
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          success: false,
+          message: 'Invalid metadata: published year must be between 1000 and 2200.',
+        }),
+      );
+      expect(result.message).not.toContain('Failed query');
+      expect(storage.moveToPath).toHaveBeenNthCalledWith(1, '/tmp/book.epub', '/library/new/book.epub');
+      expect(storage.moveToPath).toHaveBeenNthCalledWith(2, '/library/new/book.epub', '/tmp/book.epub');
+    });
+
     it('returns success with relative newName when finalize flow completes', async () => {
       const { service, processor } = makeService();
       vi.spyOn(service as never, 'findLibraryOrFail').mockResolvedValue({ id: 5, allowedFormats: ['epub'], fileNamingPattern: null } as never);
@@ -594,6 +631,33 @@ describe('BookDockFinalizeService', () => {
     expect(metadataService.replaceGenres).toHaveBeenCalledWith(15, ['Fantasy']);
   });
 
+  it('applyMetadata nulls publishedYear when it is outside database bounds', async () => {
+    const { service, db } = makeService();
+    const updateChain = {
+      set: vi.fn(),
+      where: vi.fn().mockResolvedValue(undefined),
+    };
+    updateChain.set.mockReturnValue(updateChain);
+    db.update.mockReturnValue(updateChain);
+
+    await (service as any).applyMetadata(
+      16,
+      makeRow({
+        selectedMetadata: {
+          title: 'The Black Company',
+          publishedYear: 101,
+        } as BookDockMetadata,
+        coverPath: null,
+      }),
+    );
+
+    expect(updateChain.set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        publishedYear: null,
+      }),
+    );
+  });
+
   it('applyMetadata prefers selected coverUrl and skips extracted cover copy when download succeeds', async () => {
     const { service, db, metadataService } = makeService();
     metadataService.downloadAndSaveCover.mockResolvedValueOnce(true);
@@ -616,6 +680,165 @@ describe('BookDockFinalizeService', () => {
     expect(metadataService.downloadAndSaveCover).toHaveBeenCalledWith('https://covers.example/1.jpg', 20);
     expect(metadataService.saveExtractedCoverBytes).not.toHaveBeenCalled();
     expect(mockReadFile).not.toHaveBeenCalled();
+  });
+
+  it('applyMetadata persists duration, chapters and narrators extracted from the audiobook', async () => {
+    const { service, db, metadataService } = makeService();
+    const updateChain = {
+      set: vi.fn(),
+      where: vi.fn().mockResolvedValue(undefined),
+    };
+    updateChain.set.mockReturnValue(updateChain);
+    db.update.mockReturnValue(updateChain);
+
+    await (service as any).applyMetadata(
+      30,
+      makeRow({
+        format: 'm4b',
+        fileName: 'book.m4b',
+        selectedMetadata: null,
+        coverPath: null,
+        embeddedMetadata: {
+          title: 'Artificial Condition',
+          authors: ['Martha Wells'],
+          narrators: ['Kevin R. Free'],
+          durationSeconds: 12218,
+          chapters: [
+            { title: 'Chapter 1', startMs: 0 },
+            { title: 'Chapter 2', startMs: 804850 },
+          ],
+        } as BookDockMetadata,
+      }),
+    );
+
+    expect(updateChain.set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        durationSeconds: 12218,
+        chapters: [
+          { title: 'Chapter 1', startMs: 0 },
+          { title: 'Chapter 2', startMs: 804850 },
+        ],
+      }),
+    );
+    expect(metadataService.replaceAuthors).toHaveBeenCalledWith(30, [{ name: 'Martha Wells', sortName: null }]);
+    expect(metadataService.replaceNarrators).toHaveBeenCalledWith(30, [{ name: 'Kevin R. Free', sortName: null }]);
+  });
+
+  it('applyMetadata keeps audio facts from embeddedMetadata even when scalar fields were edited', async () => {
+    const { service, db, metadataService } = makeService();
+    const updateChain = {
+      set: vi.fn(),
+      where: vi.fn().mockResolvedValue(undefined),
+    };
+    updateChain.set.mockReturnValue(updateChain);
+    db.update.mockReturnValue(updateChain);
+
+    await (service as any).applyMetadata(
+      31,
+      makeRow({
+        format: 'm4b',
+        selectedMetadata: { title: 'Edited Title' } as BookDockMetadata,
+        coverPath: null,
+        embeddedMetadata: {
+          title: 'Original Title',
+          durationSeconds: 555,
+          narrators: ['Reader One'],
+          chapters: [{ title: 'Intro', startMs: 10 }],
+        } as BookDockMetadata,
+      }),
+    );
+
+    expect(updateChain.set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Edited Title',
+        durationSeconds: 555,
+        chapters: [{ title: 'Intro', startMs: 10 }],
+      }),
+    );
+    expect(metadataService.replaceNarrators).toHaveBeenCalledWith(31, [{ name: 'Reader One', sortName: null }]);
+  });
+
+  it('applyMetadata omits audio fields and skips narrators when none were extracted', async () => {
+    const { service, db, metadataService } = makeService();
+    const updateChain = {
+      set: vi.fn(),
+      where: vi.fn().mockResolvedValue(undefined),
+    };
+    updateChain.set.mockReturnValue(updateChain);
+    db.update.mockReturnValue(updateChain);
+
+    await (service as any).applyMetadata(
+      32,
+      makeRow({
+        selectedMetadata: null,
+        coverPath: null,
+        embeddedMetadata: { title: 'Just a Book' } as BookDockMetadata,
+      }),
+    );
+
+    const patch = updateChain.set.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(patch).not.toHaveProperty('durationSeconds');
+    expect(patch).not.toHaveProperty('chapters');
+    expect(metadataService.replaceNarrators).not.toHaveBeenCalled();
+  });
+
+  it('applyMetadata sanitizes malformed chapters and drops non-positive duration before persisting', async () => {
+    const { service, db, metadataService } = makeService();
+    const updateChain = {
+      set: vi.fn(),
+      where: vi.fn().mockResolvedValue(undefined),
+    };
+    updateChain.set.mockReturnValue(updateChain);
+    db.update.mockReturnValue(updateChain);
+
+    await (service as any).applyMetadata(
+      33,
+      makeRow({
+        selectedMetadata: null,
+        coverPath: null,
+        embeddedMetadata: {
+          durationSeconds: 0,
+          chapters: [
+            { title: 'Good', startMs: 1000 },
+            { title: 'NoStart' },
+            { title: 'Negative', startMs: -5 },
+            { startMs: 2000 },
+            'garbage',
+            { title: 'Stringy', startMs: '3000.7' },
+          ],
+        } as unknown as BookDockMetadata,
+      }),
+    );
+
+    const patch = updateChain.set.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(patch).not.toHaveProperty('durationSeconds');
+    expect(patch.chapters).toEqual([
+      { title: 'Good', startMs: 1000 },
+      { title: '', startMs: 2000 },
+      { title: 'Stringy', startMs: 3001 },
+    ]);
+    expect(metadataService.replaceNarrators).not.toHaveBeenCalled();
+  });
+
+  it('applyMetadata coerces a string-typed duration into a rounded integer', async () => {
+    const { service, db } = makeService();
+    const updateChain = {
+      set: vi.fn(),
+      where: vi.fn().mockResolvedValue(undefined),
+    };
+    updateChain.set.mockReturnValue(updateChain);
+    db.update.mockReturnValue(updateChain);
+
+    await (service as any).applyMetadata(
+      34,
+      makeRow({
+        selectedMetadata: null,
+        coverPath: null,
+        embeddedMetadata: { durationSeconds: '999.6' } as unknown as BookDockMetadata,
+      }),
+    );
+
+    expect(updateChain.set).toHaveBeenCalledWith(expect.objectContaining({ durationSeconds: 1000 }));
   });
 
   it('applyMetadata falls back to extracted cover bytes when cover download is unavailable', async () => {
@@ -667,7 +890,7 @@ describe('BookDockFinalizeService', () => {
     await expect((service as any).findFolderOrFail(9, 5)).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('buildDuplicateLookup collects isbn and title keys per library', async () => {
+  it('buildDuplicateLookup collects isbn and title+author keys per library', async () => {
     const { service, db } = makeService();
     const selectChain = {
       from: vi.fn(),
@@ -679,14 +902,14 @@ describe('BookDockFinalizeService', () => {
     selectChain.where
       .mockResolvedValueOnce([{ bookId: 11, isbn13: '9780306406157' }])
       .mockResolvedValueOnce([{ bookId: 12, isbn10: '0306406152' }])
-      .mockResolvedValueOnce([{ bookId: 13, normalizedTitle: 'dune' }]);
+      .mockResolvedValueOnce([{ bookId: 13, normalizedTitle: 'dune', normalizedAuthor: 'frank herbert' }]);
     db.select.mockReturnValue(selectChain);
 
     const lookup = await (service as any).buildDuplicateLookup(
       [
         makeRow({ id: 1, targetLibraryId: 5, selectedMetadata: { isbn13: '9780306406157' } }),
         makeRow({ id: 2, targetLibraryId: 5, selectedMetadata: { isbn10: '0306406152' } }),
-        makeRow({ id: 3, targetLibraryId: 5, selectedMetadata: { title: 'Dune' } }),
+        makeRow({ id: 3, targetLibraryId: 5, selectedMetadata: { title: 'Dune', authors: ['Frank Herbert'] } }),
       ],
       undefined,
       new Map(),
@@ -694,10 +917,38 @@ describe('BookDockFinalizeService', () => {
 
     expect(lookup.get('library:5|isbn13:9780306406157')).toBe(11);
     expect(lookup.get('library:5|isbn10:0306406152')).toBe(12);
-    expect(lookup.get('library:5|title:dune')).toBe(13);
+    expect(lookup.get('library:5|title:dune|author:frank herbert')).toBe(13);
   });
 
-  it('findDuplicate queries by isbn and title when prebuilt lookup misses', async () => {
+  it('buildDuplicateLookup keeps only requested title+author pairs', async () => {
+    const { service, db } = makeService();
+    const selectChain = {
+      from: vi.fn(),
+      innerJoin: vi.fn(),
+      where: vi.fn(),
+    };
+    selectChain.from.mockReturnValue(selectChain);
+    selectChain.innerJoin.mockReturnValue(selectChain);
+    selectChain.where.mockResolvedValueOnce([
+      { bookId: 13, normalizedTitle: 'dune', normalizedAuthor: 'frank herbert' },
+      { bookId: 14, normalizedTitle: 'dune', normalizedAuthor: 'isaac asimov' },
+    ]);
+    db.select.mockReturnValue(selectChain);
+
+    const lookup = await (service as any).buildDuplicateLookup(
+      [
+        makeRow({ id: 1, targetLibraryId: 5, selectedMetadata: { title: 'Dune', authors: ['Frank Herbert'] } }),
+        makeRow({ id: 2, targetLibraryId: 5, selectedMetadata: { title: 'Foundation', authors: ['Isaac Asimov'] } }),
+      ],
+      undefined,
+      new Map(),
+    );
+
+    expect(lookup.get('library:5|title:dune|author:frank herbert')).toBe(13);
+    expect(lookup.get('library:5|title:dune|author:isaac asimov')).toBeUndefined();
+  });
+
+  it('findDuplicate queries by isbn and title+author when prebuilt lookup misses', async () => {
     const { service, db } = makeService();
     const selectChain = {
       from: vi.fn(),
@@ -708,15 +959,32 @@ describe('BookDockFinalizeService', () => {
     selectChain.from.mockReturnValue(selectChain);
     selectChain.innerJoin.mockReturnValue(selectChain);
     selectChain.where.mockReturnValue(selectChain);
-    selectChain.limit
-      .mockResolvedValueOnce([{ bookId: 91 }])
-      .mockResolvedValueOnce([{ bookId: 92 }])
-      .mockResolvedValueOnce([]);
+    selectChain.limit.mockResolvedValueOnce([{ bookId: 91 }]).mockResolvedValueOnce([{ bookId: 92 }]);
     db.select.mockReturnValue(selectChain);
 
-    await expect((service as any).findDuplicate(4, { isbn13: '9780306406157', isbn10: null, title: null })).resolves.toBe(91);
-    await expect((service as any).findDuplicate(4, { isbn13: null, isbn10: null, title: 'Dune' })).resolves.toBe(92);
-    await expect((service as any).findDuplicate(4, { isbn13: null, isbn10: null, title: null })).resolves.toBeNull();
+    await expect((service as any).findDuplicate(4, { isbn13: '9780306406157', isbn10: null, title: null, authors: [] })).resolves.toBe(91);
+    await expect((service as any).findDuplicate(4, { isbn13: null, isbn10: null, title: 'Dune', authors: ['Frank Herbert'] })).resolves.toBe(92);
+    await expect((service as any).findDuplicate(4, { isbn13: null, isbn10: null, title: 'Dune', authors: [] })).resolves.toBeNull();
+  });
+
+  it('findDuplicate does not treat title-only prebuilt entries as duplicates when author differs', async () => {
+    const { service, db } = makeService();
+    const selectChain = {
+      from: vi.fn(),
+      innerJoin: vi.fn(),
+      where: vi.fn(),
+      limit: vi.fn(),
+    };
+    selectChain.from.mockReturnValue(selectChain);
+    selectChain.innerJoin.mockReturnValue(selectChain);
+    selectChain.where.mockReturnValue(selectChain);
+    selectChain.limit.mockResolvedValueOnce([]);
+    db.select.mockReturnValue(selectChain);
+
+    const duplicateLookup = new Map([['library:4|title:dune', 77]]);
+    await expect(
+      (service as any).findDuplicate(4, { isbn13: null, isbn10: null, title: 'Dune', authors: ['Brian Herbert'] }, duplicateLookup),
+    ).resolves.toBeNull();
   });
 
   it('resolveDestination builds names from patterns and falls back to original filename', async () => {
@@ -782,10 +1050,21 @@ describe('BookDockFinalizeService', () => {
   });
 
   it('findDuplicate resolves from prebuilt lookup before querying database', async () => {
-    const { service } = makeService();
+    const { service, db } = makeService();
     const duplicateLookup = new Map([['library:4|isbn13:9780306406157', 88]]);
 
     await expect((service as any).findDuplicate(4, { isbn13: '9780306406157', isbn10: null, title: null }, duplicateLookup)).resolves.toBe(88);
+    expect(db.select).not.toHaveBeenCalled();
+  });
+
+  it('findDuplicate resolves title+author from prebuilt lookup before querying database', async () => {
+    const { service, db } = makeService();
+    const duplicateLookup = new Map([['library:4|title:dune|author:frank herbert', 89]]);
+
+    await expect(
+      (service as any).findDuplicate(4, { isbn13: null, isbn10: null, title: 'Dune', authors: ['Frank Herbert'] }, duplicateLookup),
+    ).resolves.toBe(89);
+    expect(db.select).not.toHaveBeenCalled();
   });
 
   it('triggerAutoFinalize skips when auto-finalize is disabled or destination is incomplete', async () => {

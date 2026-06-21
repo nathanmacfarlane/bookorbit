@@ -16,6 +16,7 @@ function makeBook(overrides: Partial<BookDetail> = {}): BookDetail {
     status: 'present',
     folderPath: '/books',
     addedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: null,
     title: 'Test Book',
     subtitle: null,
     description: null,
@@ -68,11 +69,11 @@ describe('useMetadataEditor', () => {
 
     const { load, save } = useMetadataEditor()
     load(book)
-    await save(book.id)
+    await save(book.id, [])
 
     const [, req] = apiMock.mock.calls[0] as [string, RequestInit]
-    const payload = JSON.parse(String(req.body)) as Record<string, unknown>
-    expect(payload.audioMetadata).toBeUndefined()
+    const { metadata } = JSON.parse(String(req.body)) as { metadata: Record<string, unknown> }
+    expect(metadata.audioMetadata).toBeUndefined()
   })
 
   it('includes audioMetadata when book has audio files', async () => {
@@ -101,13 +102,13 @@ describe('useMetadataEditor', () => {
     const { form, load, save } = useMetadataEditor()
     load(book)
     form.narrators = ['Narrator Two']
-    await save(book.id)
+    await save(book.id, [])
 
     const [, req] = apiMock.mock.calls[0] as [string, RequestInit]
     const payload = JSON.parse(String(req.body)) as {
-      audioMetadata?: { narrators?: string[]; durationSeconds?: number | null; abridged?: boolean }
+      metadata: { audioMetadata?: { narrators?: string[]; durationSeconds?: number | null; abridged?: boolean } }
     }
-    expect(payload.audioMetadata).toEqual({
+    expect(payload.metadata.audioMetadata).toEqual({
       narrators: ['Narrator Two'],
     })
   })
@@ -119,12 +120,156 @@ describe('useMetadataEditor', () => {
     const { form, load, save } = useMetadataEditor()
     load(book)
     form.publisher = 'Updated Publisher'
-    await save(book.id)
+    await save(book.id, [])
 
-    const [, req] = apiMock.mock.calls[0] as [string, RequestInit]
+    const [url, req] = apiMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/books/1/metadata-and-locks?syncFileWrite=true')
     const payload = JSON.parse(String(req.body)) as Record<string, unknown>
     expect(payload).toEqual({
-      publisher: 'Updated Publisher',
+      metadata: { publisher: 'Updated Publisher' },
+      lockedFields: [],
     })
+  })
+
+  it('returns the metadata save result from the API response', async () => {
+    const book = makeBook({ title: 'Original Title' })
+    apiMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        book: { ...book, title: 'Updated Title' },
+        write: { status: 'success', fieldsWritten: ['title'], durationMs: 12 },
+        libraryAutoWriteEnabled: true,
+      }),
+    })
+
+    const { form, load, save } = useMetadataEditor()
+    load(book)
+    form.title = 'Updated Title'
+    const result = await save(book.id, [])
+
+    expect(result).toEqual({
+      book: { ...book, title: 'Updated Title' },
+      write: { status: 'success', fieldsWritten: ['title'], durationMs: 12 },
+      libraryAutoWriteEnabled: true,
+    })
+  })
+
+  it('saves changed metadata and final locks through the atomic endpoint', async () => {
+    const book = makeBook({ providerIds: { goodreads: null } })
+    apiMock.mockResolvedValue({ ok: true, json: async () => ({ ...book, lockedFields: ['goodreadsId'] }) })
+
+    const { form, load, save } = useMetadataEditor()
+    load(book)
+    form.goodreadsId = 'manual-goodreads-id'
+    await save(book.id, ['goodreadsId'])
+
+    const [url, req] = apiMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/books/1/metadata-and-locks?syncFileWrite=true')
+    expect(JSON.parse(String(req.body))).toEqual({
+      metadata: { goodreadsId: 'manual-goodreads-id' },
+      lockedFields: ['goodreadsId'],
+    })
+  })
+
+  it('loads and saves Kobo provider IDs', async () => {
+    const book = makeBook({ providerIds: { kobo: 'old-kobo-id' } })
+    apiMock.mockResolvedValue({ ok: true, json: async () => ({ ...book, providerIds: { kobo: 'new-kobo-id' } }) })
+
+    const { form, load, save } = useMetadataEditor()
+    load(book)
+    expect(form.koboId).toBe('old-kobo-id')
+
+    form.koboId = 'new-kobo-id'
+    await save(book.id, [])
+
+    const [, req] = apiMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(req.body))).toEqual({
+      metadata: { koboId: 'new-kobo-id' },
+      lockedFields: [],
+    })
+  })
+
+  it('normalizes a zero page count to null in the save payload', async () => {
+    const book = makeBook({ pageCount: 320 })
+    apiMock.mockResolvedValue({ ok: true, json: async () => book })
+
+    const { form, load, save } = useMetadataEditor()
+    load(book)
+    form.pageCount = 0
+    await save(book.id, [])
+
+    const [, req] = apiMock.mock.calls[0] as [string, RequestInit]
+    const { metadata } = JSON.parse(String(req.body)) as { metadata: Record<string, unknown> }
+    expect(metadata.pageCount).toBeNull()
+  })
+
+  it('sends a positive page count change unchanged', async () => {
+    const book = makeBook({ pageCount: null })
+    apiMock.mockResolvedValue({ ok: true, json: async () => book })
+
+    const { form, load, save } = useMetadataEditor()
+    load(book)
+    form.pageCount = 250
+    await save(book.id, [])
+
+    const [, req] = apiMock.mock.calls[0] as [string, RequestInit]
+    const { metadata } = JSON.parse(String(req.body)) as { metadata: Record<string, unknown> }
+    expect(metadata.pageCount).toBe(250)
+  })
+
+  it('omits an unchanged page count when a zero normalizes to the existing null', async () => {
+    const book = makeBook({ pageCount: null })
+    apiMock.mockResolvedValue({ ok: true, json: async () => book })
+
+    const { form, load, save } = useMetadataEditor()
+    load(book)
+    form.pageCount = 0
+    await save(book.id, [])
+
+    const [url, req] = apiMock.mock.calls[0] as [string, RequestInit]
+    const { metadata } = JSON.parse(String(req.body)) as { metadata: Record<string, unknown> }
+    expect(metadata).not.toHaveProperty('pageCount')
+    expect(url).toBe('/api/v1/books/1/metadata-and-locks')
+  })
+
+  it('can save lock-only changes through the atomic endpoint without metadata fields', async () => {
+    const book = makeBook()
+    apiMock.mockResolvedValue({ ok: true, json: async () => ({ ...book, lockedFields: ['title'] }) })
+
+    const { load, save } = useMetadataEditor()
+    load(book)
+    await save(book.id, ['title'])
+
+    const [url, req] = apiMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/books/1/metadata-and-locks')
+    expect(JSON.parse(String(req.body))).toEqual({
+      metadata: {},
+      lockedFields: ['title'],
+    })
+  })
+
+  it('reset restores the loaded snapshot and clears the dirty flag', () => {
+    const book = makeBook({ title: 'Original Title' })
+
+    const { form, load, reset, isDirty } = useMetadataEditor()
+    load(book)
+    form.title = 'Changed Title'
+    expect(isDirty.value).toBe(true)
+
+    reset()
+    expect(form.title).toBe('Original Title')
+    expect(isDirty.value).toBe(false)
+  })
+
+  it('captures an error message when the save request fails', async () => {
+    const book = makeBook()
+    apiMock.mockResolvedValue({ ok: false, status: 400 })
+
+    const { load, save, error } = useMetadataEditor()
+    load(book)
+    const result = await save(book.id, [])
+
+    expect(result).toBeNull()
+    expect(error.value).toBe('HTTP 400')
   })
 })

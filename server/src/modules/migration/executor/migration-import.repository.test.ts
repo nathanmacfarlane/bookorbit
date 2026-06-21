@@ -24,8 +24,9 @@ describe('MigrationImportRepository', () => {
     const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
     const values = vi.fn().mockReturnValue({ onConflictDoUpdate });
     const insert = vi.fn().mockReturnValue({ values });
+    const execute = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
 
-    const repo = new MigrationImportRepository({ insert } as never);
+    const repo = new MigrationImportRepository({ insert, execute } as never);
     await repo.batchUpsertBookMetadata([
       {
         bookId: 1,
@@ -54,6 +55,30 @@ describe('MigrationImportRepository', () => {
     );
   });
 
+  it('resolves series identity for batch metadata imports', async () => {
+    const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
+    const values = vi.fn().mockReturnValue({ onConflictDoUpdate });
+    const insert = vi.fn().mockReturnValue({ values });
+    const db = { insert };
+    const seriesIdentity = {
+      resolveMetadataPatch: vi.fn().mockResolvedValue({ bookId: 1, seriesName: 'Dune', seriesId: 88 }),
+    };
+
+    const repo = new MigrationImportRepository(db as never, seriesIdentity as never);
+    await repo.batchUpsertBookMetadata([{ bookId: 1, seriesName: '  Dune  ' }]);
+
+    expect(seriesIdentity.resolveMetadataPatch).toHaveBeenCalledWith({ bookId: 1, seriesName: '  Dune  ' }, db);
+    expect(values).toHaveBeenCalledWith({ bookId: 1, seriesName: 'Dune', seriesId: 88 });
+    expect(onConflictDoUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        set: expect.objectContaining({
+          seriesName: expect.anything(),
+          seriesId: expect.anything(),
+        }),
+      }),
+    );
+  });
+
   it('clearUserBookStatuses no-ops for empty targets and deduplicates ids otherwise', async () => {
     const where = vi.fn().mockResolvedValue(undefined);
     const deleteFn = vi.fn().mockReturnValue({ where });
@@ -76,8 +101,9 @@ describe('MigrationImportRepository', () => {
     const onConflictDoUpdate = vi.fn().mockReturnValue({ returning });
     const values = vi.fn().mockReturnValue({ onConflictDoUpdate });
     const insert = vi.fn().mockReturnValue({ values });
+    const execute = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
 
-    const repo = new MigrationImportRepository({ insert } as never);
+    const repo = new MigrationImportRepository({ execute, insert } as never);
     const map = await repo.batchUpsertAuthors([
       { name: 'Frank Herbert', sortName: 'Herbert, Frank' },
       { name: 'Brian Herbert', sortName: 'Herbert, Brian' },
@@ -184,8 +210,9 @@ describe('MigrationImportRepository', () => {
     const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
     const values = vi.fn().mockReturnValue({ onConflictDoNothing });
     const insert = vi.fn().mockReturnValue({ values });
+    const execute = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
 
-    const repo = new MigrationImportRepository({ delete: deleteFn, insert } as never);
+    const repo = new MigrationImportRepository({ delete: deleteFn, execute, insert } as never);
 
     await repo.deleteBookAuthors(1);
     await repo.deleteBookNarrators(1);
@@ -312,8 +339,9 @@ describe('MigrationImportRepository', () => {
     const where = vi.fn().mockResolvedValue([{ id: 7, userId: 10, name: 'Sci-fi' }]);
     const from = vi.fn().mockReturnValue({ where });
     const select = vi.fn().mockReturnValue({ from });
+    const execute = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
 
-    const repo = new MigrationImportRepository({ insert, select } as never);
+    const repo = new MigrationImportRepository({ execute, insert, select } as never);
 
     await repo.upsertBookMetadata(1, { title: 'Dune' });
     await expect(repo.upsertAuthor({ name: 'Frank Herbert', sortName: 'Herbert, Frank' } as never)).resolves.toEqual({ id: 101 });
@@ -365,8 +393,9 @@ describe('MigrationImportRepository', () => {
     const insert = vi.fn().mockReturnValue({ values });
     const where = vi.fn().mockResolvedValue(undefined);
     const deleteFn = vi.fn().mockReturnValue({ where });
+    const execute = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
 
-    const repo = new MigrationImportRepository({ insert, delete: deleteFn } as never);
+    const repo = new MigrationImportRepository({ execute, insert, delete: deleteFn } as never);
 
     await repo.batchUpsertBookMetadata([]);
     await repo.batchDeleteBookAuthors([]);

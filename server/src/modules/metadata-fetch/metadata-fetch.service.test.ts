@@ -186,7 +186,7 @@ describe('MetadataFetchService', () => {
     expect(google.search).not.toHaveBeenCalled();
   });
 
-  it('returns no result when lookupById returns null for an existing provider id', async () => {
+  it('falls back to provider search when lookupById returns null for an existing provider id', async () => {
     const google: IdentifiableProvider = {
       key: MetadataProviderKey.GOOGLE,
       label: 'Google',
@@ -200,9 +200,36 @@ describe('MetadataFetchService', () => {
       service.search({ title: 'Dune', existingProviderIds: { [MetadataProviderKey.GOOGLE]: 'missing' } }).pipe(toArray()),
     );
 
-    expect(results).toEqual([]);
+    expect(results).toEqual([candidate(MetadataProviderKey.GOOGLE, 'search-id', 'Dune')]);
     expect(google.lookupById).toHaveBeenCalledWith('missing', expect.anything());
-    expect(google.search).not.toHaveBeenCalled();
+    expect(google.search).toHaveBeenCalledTimes(1);
+    expect(google.search).toHaveBeenCalledWith(expect.objectContaining({ title: 'Dune' }));
+  });
+
+  it('falls back to provider search when lookupById returns an irrelevant candidate', async () => {
+    const google: IdentifiableProvider = {
+      key: MetadataProviderKey.GOOGLE,
+      label: 'Google',
+      identifiable: true,
+      search: vi.fn().mockResolvedValue([candidate(MetadataProviderKey.GOOGLE, 'search-id', 'Dune')]),
+      lookupById: vi.fn().mockResolvedValue(candidate(MetadataProviderKey.GOOGLE, 'stored-id', 'Completely Unrelated')),
+    };
+    registry.select.mockReturnValue([google]);
+
+    const results = await firstValueFrom(
+      service
+        .search({
+          title: 'Dune',
+          author: 'Frank Herbert',
+          existingProviderIds: { [MetadataProviderKey.GOOGLE]: 'stored-id' },
+        })
+        .pipe(toArray()),
+    );
+
+    expect(results).toEqual([candidate(MetadataProviderKey.GOOGLE, 'search-id', 'Dune')]);
+    expect(google.lookupById).toHaveBeenCalledWith('stored-id', expect.anything());
+    expect(google.search).toHaveBeenCalledTimes(1);
+    expect(google.search).toHaveBeenCalledWith(expect.objectContaining({ title: 'Dune', author: 'Frank Herbert' }));
   });
 
   it('isolates provider failures so one provider error does not fail the full stream', async () => {
@@ -283,7 +310,9 @@ describe('MetadataFetchService', () => {
       openLibraryId: 'ol-1',
       itunesId: null,
       audibleId: 'B0ABC12345',
+      koboId: 'beautiful-ugly-3',
       comicvineId: 'cv-1',
+      ranobedbId: null,
     });
     metadataFetchRepository.hasLibraryAccess.mockResolvedValue(true);
 
@@ -297,7 +326,9 @@ describe('MetadataFetchService', () => {
       [MetadataProviderKey.OPEN_LIBRARY]: 'ol-1',
       [MetadataProviderKey.ITUNES]: undefined,
       [MetadataProviderKey.AUDIBLE]: 'B0ABC12345',
+      [MetadataProviderKey.KOBO]: 'beautiful-ugly-3',
       [MetadataProviderKey.COMICVINE]: 'cv-1',
+      [MetadataProviderKey.RANOBEDB]: undefined,
     });
     expect(metadataFetchRepository.hasLibraryAccess).toHaveBeenCalledWith(5, 7);
   });
@@ -312,7 +343,9 @@ describe('MetadataFetchService', () => {
       openLibraryId: null,
       itunesId: null,
       audibleId: null,
+      koboId: null,
       comicvineId: null,
+      ranobedbId: null,
     });
 
     await expect(service.getStoredProviderIds(99, makeUser({ isSuperuser: true }))).resolves.toEqual({
@@ -323,7 +356,9 @@ describe('MetadataFetchService', () => {
       [MetadataProviderKey.OPEN_LIBRARY]: undefined,
       [MetadataProviderKey.ITUNES]: undefined,
       [MetadataProviderKey.AUDIBLE]: undefined,
+      [MetadataProviderKey.KOBO]: undefined,
       [MetadataProviderKey.COMICVINE]: undefined,
+      [MetadataProviderKey.RANOBEDB]: undefined,
     });
     expect(metadataFetchRepository.hasLibraryAccess).not.toHaveBeenCalled();
   });
@@ -344,7 +379,9 @@ describe('MetadataFetchService', () => {
       openLibraryId: null,
       itunesId: null,
       audibleId: null,
+      koboId: null,
       comicvineId: null,
+      ranobedbId: null,
     });
     metadataFetchRepository.hasLibraryAccess.mockResolvedValue(false);
 
