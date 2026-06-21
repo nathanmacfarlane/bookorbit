@@ -362,4 +362,36 @@ describe('UserPreferencesService', () => {
     await expect(service.upsertWhatsNewPreferences(11, { popupEnabled: 'yes' })).rejects.toBeInstanceOf(BadRequestException);
     expect(repo.upsert).not.toHaveBeenCalled();
   });
+
+  describe('reading-queue view preference', () => {
+    const USER_ID = 42;
+
+    it('returns the default grid view when nothing stored', async () => {
+      repo.findByCategory.mockResolvedValueOnce(undefined);
+      const result = await service.getReadingQueuePreferences(USER_ID);
+      expect(result).toEqual({ view: 'grid' });
+      expect(repo.findByCategory).toHaveBeenCalledWith(USER_ID, 'reading-queue');
+    });
+
+    it('returns the stored view when a row exists with list', async () => {
+      repo.findByCategory.mockResolvedValueOnce({ data: { view: 'list' } } as never);
+      const result = await service.getReadingQueuePreferences(USER_ID);
+      expect(result).toEqual({ view: 'list' });
+    });
+
+    it('rejects an invalid view on upsert', async () => {
+      await expect(service.upsertReadingQueuePreferences(USER_ID, { view: 'cards' })).rejects.toBeTruthy();
+      expect(repo.upsert).not.toHaveBeenCalled();
+    });
+
+    it('accepts grid view on upsert', async () => {
+      await expect(service.upsertReadingQueuePreferences(USER_ID, { view: 'grid' })).resolves.toBeUndefined();
+      expect(repo.upsert).toHaveBeenCalledWith(USER_ID, 'reading-queue', { view: 'grid' });
+    });
+
+    it('accepts list view on upsert', async () => {
+      await expect(service.upsertReadingQueuePreferences(USER_ID, { view: 'list' })).resolves.toBeUndefined();
+      expect(repo.upsert).toHaveBeenCalledWith(USER_ID, 'reading-queue', { view: 'list' });
+    });
+  });
 });

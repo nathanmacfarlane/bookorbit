@@ -44,4 +44,16 @@ export class UserPreferencesController {
   async upsertWhatsNewPreferences(@Body() dto: UpsertUserPreferenceDto, @CurrentUser() user: RequestUser) {
     await this.userPreferencesService.upsertWhatsNewPreferences(user.id, dto.settings);
   }
+
+  @Get('reading-queue')
+  async getReadingQueuePreferences(@CurrentUser() user: RequestUser) {
+    const settings = await this.userPreferencesService.getReadingQueuePreferences(user.id);
+    return { settings };
+  }
+
+  @Put('reading-queue')
+  @HttpCode(204)
+  async upsertReadingQueuePreferences(@Body() dto: UpsertUserPreferenceDto, @CurrentUser() user: RequestUser) {
+    await this.userPreferencesService.upsertReadingQueuePreferences(user.id, dto.settings);
+  }
 }

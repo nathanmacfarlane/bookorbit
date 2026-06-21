@@ -80,6 +80,10 @@ const WHATS_NEW_PREFERENCES_SCHEMA = z
 
 const WHATS_NEW_DEFAULTS: WhatsNewPreferences = { lastSeenVersion: null, popupEnabled: true };
 
+const READING_QUEUE_CATEGORY = 'reading-queue';
+const READING_QUEUE_DEFAULTS = { view: 'grid' as const };
+const READING_QUEUE_SCHEMA = z.object({ view: z.enum(['grid', 'list']) }).strict();
+
 @Injectable()
 export class UserPreferencesService {
   private readonly logger = new Logger(UserPreferencesService.name);
@@ -160,6 +164,19 @@ export class UserPreferencesService {
       );
       throw err;
     }
+  }
+
+  async getReadingQueuePreferences(userId: number): Promise<{ view: 'grid' | 'list' }> {
+    const row = await this.repo.findByCategory(userId, READING_QUEUE_CATEGORY);
+    if (!row) return { ...READING_QUEUE_DEFAULTS };
+    const parsed = READING_QUEUE_SCHEMA.safeParse(row.data);
+    return parsed.success ? parsed.data : { ...READING_QUEUE_DEFAULTS };
+  }
+
+  async upsertReadingQueuePreferences(userId: number, data: Record<string, unknown>): Promise<void> {
+    const parsed = READING_QUEUE_SCHEMA.safeParse(data);
+    if (!parsed.success) throw new BadRequestException('Invalid reading queue preferences');
+    await this.repo.upsert(userId, READING_QUEUE_CATEGORY, parsed.data);
   }
 
   async upsertDisplayPreferences(userId: number, data: Record<string, unknown>): Promise<void> {
