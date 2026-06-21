@@ -29,3 +29,4 @@ export * from './achievements';
 export * from './hardcover';
 export * from './zlib';
 export * from './user-preferences';
+export * from './reading-queue';
