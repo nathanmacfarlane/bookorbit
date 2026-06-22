@@ -1,10 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import type { ReadingQueueResponse } from '@bookorbit/types'
 
 vi.mock('../../api/reading-queue.api', () => ({
-  fetchReadingQueue: vi.fn(),
-  addToReadingQueue: vi.fn(),
-  removeFromReadingQueue: vi.fn(),
-  reorderReadingQueue: vi.fn(),
+  fetchReadingQueue: vi.fn<() => Promise<ReadingQueueResponse>>(),
+  addToReadingQueue: vi.fn<(bookId: number) => Promise<ReadingQueueResponse>>(),
+  removeFromReadingQueue: vi.fn<(bookId: number) => Promise<ReadingQueueResponse>>(),
+  reorderReadingQueue: vi.fn<(bookIds: number[]) => Promise<ReadingQueueResponse>>(),
 }))
 
 import * as apiMod from '../../api/reading-queue.api'

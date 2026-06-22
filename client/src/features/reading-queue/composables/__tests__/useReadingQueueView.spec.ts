@@ -1,8 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import type { ReadingQueueView } from '@bookorbit/types'
 
 vi.mock('../../api/reading-queue.api', () => ({
-  fetchReadingQueueView: vi.fn(),
-  saveReadingQueueView: vi.fn(),
+  fetchReadingQueueView: vi.fn<() => Promise<ReadingQueueView>>(),
+  saveReadingQueueView: vi.fn<(view: ReadingQueueView) => Promise<void>>(),
 }))
 
 import * as apiMod from '../../api/reading-queue.api'
