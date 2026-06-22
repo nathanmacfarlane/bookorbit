@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { Plus } from 'lucide-vue-next'
 import type { ReadingQueueItem } from '@bookorbit/types'
 import { useReadingQueue } from '@/features/reading-queue/composables/useReadingQueue'
@@ -11,6 +12,11 @@ import AddBooksToQueueSheet from '@/features/reading-queue/components/AddBooksTo
 const { items, loading, load, remove, applyReorder } = useReadingQueue()
 const { view, load: loadView, setView } = useReadingQueueView()
 const addSheetOpen = ref(false)
+const router = useRouter()
+
+function onOpen(bookId: number) {
+  router.push({ name: 'book-detail', params: { bookId } })
+}
 
 onMounted(() => {
   load()
@@ -66,8 +72,8 @@ function onSheetClose(open: boolean) {
       </div>
 
       <template v-else>
-        <UpNextGrid v-if="view === 'grid'" :items="items" @reorder="onReorder" @remove="remove" />
-        <UpNextList v-else :items="items" @reorder="onReorder" @remove="remove" />
+        <UpNextGrid v-if="view === 'grid'" :items="items" @reorder="onReorder" @remove="remove" @open="onOpen" />
+        <UpNextList v-else :items="items" @reorder="onReorder" @remove="remove" @open="onOpen" />
       </template>
     </div>
   </main>
