@@ -7,6 +7,7 @@ import {
   FolderMinus,
   FolderPlus,
   ImageDown,
+  ListPlus,
   Lock,
   Loader2,
   Mail,
@@ -71,6 +72,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'add-to-collection': []
+  'add-to-queue': []
   'remove-from-collection': []
   edit: []
   'edit-individually': []
@@ -337,6 +339,20 @@ watch(
                 </button>
               </TooltipTrigger>
               <TooltipContent side="top">Add to collection</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <button
+                  data-testid="action-add-to-queue"
+                  :disabled="count === 0"
+                  :class="[BTN_ICON, count > 0 ? BTN_PRIMARY : BTN_DISABLED]"
+                  @click="emit('add-to-queue')"
+                >
+                  <ListPlus :size="ICON_SIZE" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Add to Up Next</TooltipContent>
             </Tooltip>
 
             <Tooltip v-if="inCollection">

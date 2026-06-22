@@ -12,6 +12,7 @@ import BookQuickView from '@/features/book/components/BookQuickView.vue'
 import ViewHeader from '@/components/ViewHeader.vue'
 import SelectionActionBar from '@/components/SelectionActionBar.vue'
 import AddToCollectionSheet from '@/features/collection/components/AddToCollectionSheet.vue'
+import { addToReadingQueue } from '@/features/reading-queue/api/reading-queue.api'
 import BulkEditMetadataDialog from '@/features/book/components/BulkEditMetadataDialog.vue'
 import MetadataExportDialog from '@/features/book/components/MetadataExportDialog.vue'
 import EditCollectionDialog from '@/features/collection/components/EditCollectionDialog.vue'
@@ -219,6 +220,21 @@ const editCollectionOpen = ref(false)
 const mobileControlsExpanded = ref(false)
 let removingInProgress = false
 
+async function handleAddSelectedToQueue() {
+  const ids = [...selectedIds.value]
+  if (ids.length === 0) {
+    toast.info('Select books to add to Up Next')
+    return
+  }
+  try {
+    await Promise.all(ids.map((id) => addToReadingQueue(id)))
+    toast.success(`Added ${ids.length} book${ids.length === 1 ? '' : 's'} to Up Next`)
+    exitSelectionMode()
+  } catch {
+    toast.error('Could not add some books to Up Next')
+  }
+}
+
 async function handleRemoveFromCollection() {
   if (removingInProgress || !collectionId.value || selectedIds.value.size === 0) return
   removingInProgress = true
@@ -361,6 +377,7 @@ watch(collectionId, async () => {
     @download="handleDownloadFiles"
     @export-metadata="openMetadataExport"
     @add-to-collection="addToCollectionOpen = true"
+    @add-to-queue="handleAddSelectedToQueue"
     @remove-from-collection="handleRemoveFromCollection"
     @edit="handleEditSelected"
     @edit-individually="handleEditIndividually"

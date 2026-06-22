@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { Upload, RotateCw, Trash2, PenLine, FileText, Search, X, Wand2, RefreshCw, FolderPlus, ListPlus, Loader2 } from 'lucide-vue-next'
+import { Upload, RotateCw, Trash2, PenLine, FileText, Search, X, Wand2, RefreshCw, FolderPlus, Loader2 } from 'lucide-vue-next'
 import type { BookDockFileStatus } from '@bookorbit/types'
 import { api } from '@/lib/api'
 import { usePermissions } from '@/features/auth/composables/usePermissions'
@@ -27,7 +27,6 @@ const emit = defineEmits<{
   refresh: []
   search: [string]
   applyFetched: []
-  addToQueue: []
 }>()
 
 const { files: uploadFiles, isUploading, addFiles, clearCompleted } = useBookDockUpload()
@@ -216,14 +215,6 @@ function clearSearch() {
       >
         <FolderPlus class="size-3.5" />
         Set Destination
-      </button>
-      <button
-        data-testid="book-dock-add-to-queue"
-        class="flex items-center gap-1.5 h-7 px-3 rounded-lg text-xs font-medium bg-sky-500/12 text-sky-700 dark:text-sky-300 hover:bg-sky-500/20 transition-all active:scale-95"
-        @click="$emit('addToQueue')"
-      >
-        <ListPlus class="size-3.5" />
-        Add to Up Next
       </button>
       <Tooltip v-if="fetchedCount > 0">
         <TooltipTrigger as-child>

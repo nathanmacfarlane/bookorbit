@@ -28,6 +28,8 @@ import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import ViewHeader from '@/components/ViewHeader.vue'
 import SelectionActionBar from '@/components/SelectionActionBar.vue'
 import AddToCollectionSheet from '@/features/collection/components/AddToCollectionSheet.vue'
+import { toast } from 'vue-sonner'
+import { addToReadingQueue } from '@/features/reading-queue/api/reading-queue.api'
 import BulkEditMetadataDialog from '@/features/book/components/BulkEditMetadataDialog.vue'
 import { useBulkEditMetadata } from '@/features/book/composables/useBulkEditMetadata'
 import type { BulkEditFields } from '@/features/book/composables/useBulkEditMetadata'
@@ -493,6 +495,21 @@ function handleEditSelected() {
   setBookContext(ids, ids.length)
   router.push({ name: 'book-detail', params: { bookId: ids[0] }, query: { tab: 'edit' } })
   exitSelectionMode()
+}
+
+async function handleAddSelectedToQueue() {
+  const ids = [...selectedIds.value]
+  if (ids.length === 0) {
+    toast.info('Select books to add to Up Next')
+    return
+  }
+  try {
+    await Promise.all(ids.map((id) => addToReadingQueue(id)))
+    toast.success(`Added ${ids.length} book${ids.length === 1 ? '' : 's'} to Up Next`)
+    exitSelectionMode()
+  } catch {
+    toast.error('Could not add some books to Up Next')
+  }
 }
 
 async function handleBulkEditConfirm(fields: BulkEditFields) {
@@ -963,6 +980,7 @@ async function handleToggleCollapse() {
     @download="handleDownloadFiles"
     @export-metadata="openMetadataExport(querySelection ? 'all-matching' : 'selected')"
     @add-to-collection="addToCollectionOpen = true"
+    @add-to-queue="handleAddSelectedToQueue"
     @edit="handleEditSelected"
     @edit-individually="handleEditIndividually"
     @refresh-metadata="handleBulkRefreshMetadata"

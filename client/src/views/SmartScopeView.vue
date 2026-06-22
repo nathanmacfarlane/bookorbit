@@ -23,6 +23,7 @@ import ViewHeader from '@/components/ViewHeader.vue'
 import SmartScopeEditorPanel from '@/features/smart-scope/components/SmartScopeEditorPanel.vue'
 import SelectionActionBar from '@/components/SelectionActionBar.vue'
 import AddToCollectionSheet from '@/features/collection/components/AddToCollectionSheet.vue'
+import { addToReadingQueue } from '@/features/reading-queue/api/reading-queue.api'
 import BulkEditMetadataDialog from '@/features/book/components/BulkEditMetadataDialog.vue'
 import MetadataExportDialog from '@/features/book/components/MetadataExportDialog.vue'
 import SendBookDialog from '@/features/email/components/SendBookDialog.vue'
@@ -237,6 +238,21 @@ function handleEditSelected() {
   exitSelectionMode()
 }
 
+async function handleAddSelectedToQueue() {
+  const ids = [...selectedIds.value]
+  if (ids.length === 0) {
+    toast.info('Select books to add to Up Next')
+    return
+  }
+  try {
+    await Promise.all(ids.map((id) => addToReadingQueue(id)))
+    toast.success(`Added ${ids.length} book${ids.length === 1 ? '' : 's'} to Up Next`)
+    exitSelectionMode()
+  } catch {
+    toast.error('Could not add some books to Up Next')
+  }
+}
+
 async function handleBulkEditConfirm(fields: BulkEditFields) {
   const result = await submitBulkEdit(fields)
   if (result) {
@@ -381,6 +397,7 @@ watch(smartScopeId, async () => {
     @download="handleDownloadFiles"
     @export-metadata="openMetadataExport"
     @add-to-collection="addToCollectionOpen = true"
+    @add-to-queue="handleAddSelectedToQueue"
     @edit="handleEditSelected"
     @edit-individually="handleEditIndividually"
     @refresh-metadata="handleBulkRefreshMetadata"
