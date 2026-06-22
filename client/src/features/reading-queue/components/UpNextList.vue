@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { MoreVertical } from 'lucide-vue-next'
 import type { ReadingQueueItem } from '@bookorbit/types'
 import BookCoverImage from '@/features/book/components/BookCoverImage.vue'
 import { useDraggableList } from '@/features/dashboard/composables/useDraggableList'
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu'
 
 const props = defineProps<{
   items: ReadingQueueItem[]
@@ -11,6 +13,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   reorder: [items: ReadingQueueItem[]]
   remove: [bookId: number]
+  open: [bookId: number]
 }>()
 
 const local = ref<ReadingQueueItem[]>([...props.items])
@@ -48,23 +51,23 @@ function handleDrop(index: number) {
         {{ index + 1 }}
       </span>
 
-      <!-- Cover thumbnail -->
-      <BookCoverImage
-        :book-id="item.book.id"
-        type="thumbnail"
-        :version="item.book.updatedAt"
-        :alt="item.book.title ?? ''"
-        class="h-14 w-10 object-cover rounded shrink-0 bg-muted"
-      />
-
-      <!-- Title + authors -->
-      <div class="flex-1 min-w-0">
-        <p class="text-sm font-medium text-foreground truncate">
-          {{ item.book.title ?? 'Untitled' }}
-        </p>
-        <p v-if="item.book.authors.length" class="text-xs text-muted-foreground truncate mt-0.5">
-          {{ item.book.authors.join(', ') }}
-        </p>
+      <!-- Clickable open region (cover + title/authors) -->
+      <div data-testid="upnext-open" class="flex items-center gap-3 flex-1 min-w-0 cursor-pointer" @click="emit('open', item.book.id)">
+        <BookCoverImage
+          :book-id="item.book.id"
+          type="thumbnail"
+          :version="item.book.updatedAt"
+          :alt="item.book.title ?? ''"
+          class="h-14 w-10 object-cover rounded shrink-0 bg-muted"
+        />
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-medium text-foreground truncate">
+            {{ item.book.title ?? 'Untitled' }}
+          </p>
+          <p v-if="item.book.authors.length" class="text-xs text-muted-foreground truncate mt-0.5">
+            {{ item.book.authors.join(', ') }}
+          </p>
+        </div>
       </div>
 
       <!-- Drag handle affordance -->
@@ -79,26 +82,23 @@ function handleDrop(index: number) {
         </svg>
       </span>
 
-      <!-- Remove button -->
-      <button
-        class="shrink-0 flex items-center justify-center w-7 h-7 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-        title="Remove from queue"
-        @click.stop="emit('remove', item.book.id)"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          class="w-4 h-4"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      </button>
+      <!-- 3-dot menu -->
+      <DropdownMenu>
+        <DropdownMenuTrigger as-child>
+          <button
+            data-testid="upnext-menu"
+            class="shrink-0 flex items-center justify-center w-7 h-7 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            title="Actions"
+            @click.stop
+          >
+            <MoreVertical class="w-4 h-4" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem data-testid="upnext-view-details" @click="emit('open', item.book.id)">View details</DropdownMenuItem>
+          <DropdownMenuItem data-testid="upnext-remove" @click="emit('remove', item.book.id)">Remove from queue</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   </div>
 </template>
