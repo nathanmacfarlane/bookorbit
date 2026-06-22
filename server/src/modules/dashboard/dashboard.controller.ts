@@ -82,4 +82,9 @@ export class DashboardController {
   getReadingRhythm(@CurrentUser() user: RequestUser) {
     return this.widgetService.getReadingRhythm(user);
   }
+
+  @Get('widgets/up-next')
+  getUpNext(@CurrentUser() user: RequestUser) {
+    return this.widgetService.getUpNext(user);
+  }
 }

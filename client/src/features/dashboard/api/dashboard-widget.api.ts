@@ -10,6 +10,7 @@ import type {
   ReadingGoalWidgetData,
   ReadingRhythmWidgetData,
   ReadingStreakWidgetData,
+  UpNextWidgetData,
   YearProjectionWidgetData,
 } from '@bookorbit/types'
 import { api } from '@/lib/api'
@@ -83,5 +84,11 @@ export async function fetchDiversityScore(): Promise<DiversityScoreWidgetData> {
 export async function fetchReadingRhythm(): Promise<ReadingRhythmWidgetData> {
   const res = await api('/api/v1/dashboard/widgets/reading-rhythm')
   if (!res.ok) throw new Error('Failed to fetch reading rhythm')
+  return res.json()
+}
+
+export async function fetchUpNext(): Promise<UpNextWidgetData> {
+  const res = await api('/api/v1/dashboard/widgets/up-next')
+  if (!res.ok) throw new Error('Failed to fetch up next')
   return res.json()
 }

@@ -18,6 +18,7 @@ const WIDGET_LABELS: Record<WidgetType, string> = {
   'long-wait': 'The Long Wait',
   'diversity-score': 'Diversity Score',
   'reading-rhythm': 'Reading Rhythm',
+  'up-next': 'Up Next',
 }
 
 const DEFAULT_WIDGETS: WidgetConfig[] = [
@@ -33,6 +34,7 @@ const DEFAULT_WIDGETS: WidgetConfig[] = [
   { id: '10', type: 'library-overview', enabled: false, order: 10 },
   { id: '11', type: 'year-projection', enabled: false, order: 11 },
   { id: '12', type: 'long-wait', enabled: false, order: 12 },
+  { id: '13', type: 'up-next', enabled: false, order: 13 },
 ]
 
 const VALID_TYPES = new Set<WidgetType>(WIDGET_TYPES)

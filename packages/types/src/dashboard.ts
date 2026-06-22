@@ -1,3 +1,5 @@
+import type { ReadingQueueItem } from "./reading-queue";
+
 export const SCROLLER_TYPE = {
   RECENTLY_ADDED: "recently-added",
   CONTINUE_READING: "continue-reading",
@@ -34,6 +36,7 @@ export const WIDGET_TYPE = {
   LIBRARY_OVERVIEW: "library-overview",
   YEAR_PROJECTION: "year-projection",
   LONG_WAIT: "long-wait",
+  UP_NEXT: "up-next",
 } as const;
 
 export type WidgetType = (typeof WIDGET_TYPE)[keyof typeof WIDGET_TYPE];
@@ -179,3 +182,8 @@ export interface ReadingRhythmWidgetData {
   activeDays: number;
   totalDays: number;
 }
+
+export type UpNextWidgetData = {
+  items: ReadingQueueItem[];
+  totalCount: number;
+};

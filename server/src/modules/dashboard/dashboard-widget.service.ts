@@ -12,6 +12,7 @@ import type {
   ReadingGoalWidgetData,
   ReadingRhythmWidgetData,
   ReadingStreakWidgetData,
+  UpNextWidgetData,
   UserSettings,
   YearProjectionWidgetData,
 } from '@bookorbit/types';
@@ -19,6 +20,7 @@ import type {
 import type { RequestUser } from '../../common/types/request-user';
 import { StatsCache } from '../../common/cache/stats-cache';
 import { LibraryService } from '../library/library.service';
+import { ReadingQueueService } from '../reading-queue/reading-queue.service';
 import {
   buildDaysSeries,
   computeChallengeResult,
@@ -45,6 +47,7 @@ export class DashboardWidgetService {
   constructor(
     private readonly widgetRepo: DashboardWidgetRepository,
     private readonly libraryService: LibraryService,
+    private readonly readingQueueService: ReadingQueueService,
   ) {}
 
   private getContentFilters(user: RequestUser) {
@@ -215,5 +218,10 @@ export class DashboardWidgetService {
       const rhythm = computeRhythm(days);
       return { days, ...rhythm };
     });
+  }
+
+  async getUpNext(user: RequestUser): Promise<UpNextWidgetData> {
+    const queue = await this.readingQueueService.getQueue(user);
+    return { items: queue.items.slice(0, 5), totalCount: queue.items.length };
   }
 }

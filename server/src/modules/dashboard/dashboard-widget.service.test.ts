@@ -43,8 +43,11 @@ function makeService() {
   const libraryService = {
     findAccessibleLibraryIds: vi.fn(),
   };
+  const readingQueueService = {
+    getQueue: vi.fn(),
+  };
 
-  const service = new DashboardWidgetService(widgetRepo as never, libraryService as never);
+  const service = new DashboardWidgetService(widgetRepo as never, libraryService as never, readingQueueService as never);
   return { service, widgetRepo, libraryService };
 }
 

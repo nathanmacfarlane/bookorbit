@@ -39,6 +39,7 @@ function makeController() {
     getLongWait: vi.fn(),
     getDiversityScore: vi.fn(),
     getReadingRhythm: vi.fn(),
+    getUpNext: vi.fn(),
   };
 
   const controller = new DashboardController(dashboardService as never, widgetService as never);
