@@ -9,7 +9,7 @@ import { randomUUID } from 'crypto';
 import { sanitizeLogValue } from '../../common/utils/log-sanitize.utils';
 
 // Hard ceiling applied at the multipart level. The service enforces a lower configurable limit.
-export const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // 500 MB
+export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
 
 @Injectable()
 export class UploadStorageService {

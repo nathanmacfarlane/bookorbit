@@ -34,7 +34,7 @@ describe('BookFileUploadController', () => {
       expect(uploadService.addFileToBook).not.toHaveBeenCalled();
     });
 
-    it('passes 500 MB file size limit to multipart parser', async () => {
+    it('passes the max upload file size limit to multipart parser', async () => {
       const stream = {};
       const req = { file: vi.fn().mockResolvedValue({ filename: 'book.epub', file: stream }) };
       uploadService.addFileToBook.mockResolvedValue({ id: 1 });
